@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # 🎮 PIXO - Next-Gen Gaming Arena
 
 A modern, dark gaming-style mobile & web application built with **React Native** and **Expo**, powered by cyber neon aesthetics.
@@ -78,3 +79,6 @@ npx expo start --android
   ```bash
   npx expo start --web
   ```
+=======
+# pixo
+>>>>>>> b34427f67fab591d413d192fe7698a5f2fa1a59f
