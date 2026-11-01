@@ -22,8 +22,11 @@ import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunner
 import { TargetNumberGameModal } from '../components/gameplay/TargetNumberGameModal';
 import { RestoreStreakModal } from '../components/profile/RestoreStreakModal';
 import { CoinStoreScreen } from './CoinStoreScreen';
-import { LeftChatPanel, RightChatPanel } from '../components/chat';
-import { GamingActivityService } from '../services/gamingActivityService';
+import {
+  GamingActivityService,
+  GAME_LEVELS_CONFIG,
+  DEFAULT_DAILY_QUESTS,
+} from '../services/gamingActivityService';
 import { AuthService } from '../services/authService';
 import { GamePersistenceService } from '../services/gamePersistenceService';
 import { useAuth } from '../context/AuthContext';
@@ -174,42 +177,14 @@ const DISCOVERY_GAMES = [
   },
 ];
 
-// Daily Quests Data
-const INITIAL_DAILY_QUESTS = [
-  {
-    id: 'q1',
-    title: 'Cyber Strike Highscore',
-    desc: 'Score over 15,000 points in Neon Runner: 2099',
-    reward: '+300 XP',
-    rewardXp: 300,
-    current: 0,
-    target: 15000,
-    claimed: false,
-    icon: 'trophy-outline',
-  },
-  {
-    id: 'q2',
-    title: 'Daily Solo Training',
-    desc: 'Complete 3 single-player dungeon runs in Shadow Blade',
-    reward: '+200 XP',
-    rewardXp: 200,
-    current: 0,
-    target: 3,
-    claimed: false,
-    icon: 'flame-outline',
-  },
-  {
-    id: 'q3',
-    title: 'Combo Master',
-    desc: 'Execute 50 critical hits in any campaign mission',
-    reward: '+150 XP',
-    rewardXp: 150,
-    current: 0,
-    target: 50,
-    claimed: false,
-    icon: 'shield-checkmark-outline',
-  },
-];
+// Daily Quests Data - Default state from Master Prompt Section 4
+const INITIAL_DAILY_QUESTS = DEFAULT_DAILY_QUESTS.map((q) => ({
+  ...q,
+  current: 0,
+  claimed: false,
+  isCompleted: false,
+  progress: 0,
+}));
 
 // Trending Games
 const TRENDING_GAMES = [
@@ -317,18 +292,38 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     refreshActiveSessionStatus();
   }, [isTargetGameOpen, user?.id]);
 
-  // Responsive Dual Chat UI states
-  const { width: windowWidth } = useWindowDimensions();
-  const isDesktop = windowWidth >= 1024;
-  const isTablet = windowWidth >= 768 && windowWidth < 1024;
-  const isMobileLayout = windowWidth < 768;
-  const chatPanelWidth = isDesktop ? (windowWidth >= 1280 ? 260 : 235) : 220;
-
-  const [leftCollapsed, setLeftCollapsed] = useState(false);
-  const [rightCollapsed, setRightCollapsed] = useState(false);
-  const [activeMobileChat, setActiveMobileChat] = useState(null); // null | 'left' | 'right'
+  // Sequential Level & Daily Quest states (Master Prompt Sections 4 & 5)
+  const [unlockedLevel, setUnlockedLevel] = useState(1);
+  const [gameLevels, setGameLevels] = useState([]);
+  const [dailyQuests, setDailyQuests] = useState([]);
+  const [resetCountdown, setResetCountdown] = useState('8h 00m');
+  const [targetLevelToPlay, setTargetLevelToPlay] = useState(1);
 
   const playerName = user?.name || 'SoloSlayer';
+
+  // Load levels and quests from database
+  const loadLevelsAndQuests = async () => {
+    if (!user?.id) return;
+    try {
+      const [unlocked, levels, qData] = await Promise.all([
+        GamingActivityService.getUserUnlockedLevel(user.id),
+        GamingActivityService.getGameLevels(user.id),
+        GamingActivityService.getDailyQuests(user.id),
+      ]);
+      setUnlockedLevel(unlocked || 1);
+      setGameLevels(levels || []);
+      if (qData) {
+        setDailyQuests(qData.quests || []);
+        setResetCountdown(qData.resetTimeString || GamingActivityService.getTimeUntilMidnight());
+      }
+    } catch (e) {
+      console.warn('Error loading game levels or daily quests:', e);
+    }
+  };
+
+  useEffect(() => {
+    loadLevelsAndQuests();
+  }, [user?.id]);
 
   // Sync state when user session or streak updates
   useEffect(() => {
@@ -356,42 +351,43 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const handleTransactionsChanged = async () => {
     if (refreshStreak) await refreshStreak();
     await loadRecentTransactions();
+    await loadLevelsAndQuests();
   };
 
-  // Claim Quest Reward (Only for verified in-game progress)
-  const handleClaimQuest = async (questId, rewardXp) => {
-    setQuests((prev) =>
-      prev.map((q) => (q.id === questId ? { ...q, claimed: true } : q))
-    );
-
-    const bonus = rewardXp || 150;
-    const updatedXp = userXp + bonus;
-    setUserXp(updatedXp);
-    if (addXp) addXp(bonus);
-
-    if (user?.id) {
-      try {
-        const qObj = quests.find((q) => q.id === questId);
-        const sess = await GamingActivityService.startSession(user.id, {
-          id: questId,
-          title: qObj?.title || 'Daily Solo Mission',
-          category: 'Daily Quest',
-          icon: 'trophy',
-          mode: 'Daily Objective',
-        });
-        await GamingActivityService.completeSession(user.id, sess.id, {
-          score: 15000,
-          result: 'Mission Complete',
-          xpAwarded: bonus,
-          achievements: ['Daily Solo Finisher'],
-        });
+  // Claim Daily Quest Reward (Section 4)
+  const handleClaimDailyQuestReward = async (questId) => {
+    if (!user?.id) return;
+    try {
+      const res = await GamingActivityService.claimQuestReward(user.id, questId);
+      if (res && res.success) {
+        if (addXp && res.xpAwarded) addXp(res.xpAwarded);
+        setUserXp((prev) => prev + res.xpAwarded);
+        setUserCoins((prev) => prev + res.coinsAwarded);
         await handleTransactionsChanged();
-      } catch (err) {
-        console.warn('Failed to record quest completion:', err);
+        Alert.alert(
+          'Quest Reward Claimed! 🏆',
+          `+${res.xpAwarded} XP and +${res.coinsAwarded} Coins added to your balance!`
+        );
+      } else {
+        Alert.alert('Notice', res?.message || 'Quest not completed or already claimed.');
       }
+    } catch (err) {
+      console.warn('Error claiming quest reward:', err);
+      Alert.alert('Error', 'Unable to claim quest reward. Please try again.');
     }
+  };
 
-    Alert.alert('Quest Reward Claimed! 🏆', `+${bonus} XP recorded and qualifying daily streak updated!`);
+  // Launch Target Number for specific sequential level (Section 5)
+  const handlePlayLevel = (levelNum) => {
+    if (levelNum > unlockedLevel) {
+      Alert.alert(
+        '🔒 Level Locked',
+        `Complete Level ${levelNum - 1} first to unlock Level ${levelNum}!`
+      );
+      return;
+    }
+    setTargetLevelToPlay(levelNum);
+    setIsTargetGameOpen(true);
   };
 
   // Launch Game Handler — opens interactive gameplay simulator
@@ -461,23 +457,11 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     <GlowingBackground>
       <View style={styles.appShell}>
         {/* ========================================================= */}
-        {/* LEFT CHAT PANEL: SMART COMPACT AI CO-PILOT               */}
-        {/* ========================================================= */}
-        {!isMobileLayout && (
-          <LeftChatPanel
-            user={user}
-            width={chatPanelWidth}
-            isCollapsed={leftCollapsed}
-            onToggleCollapse={() => setLeftCollapsed(!leftCollapsed)}
-          />
-        )}
-
-        {/* ========================================================= */}
-        {/* CENTRAL VIEWPORT: DASHBOARD / PROFILE / MOBILE VIEW       */}
+        {/* CENTRAL FULL-WIDTH VIEWPORT                               */}
         {/* ========================================================= */}
         <View style={styles.centerViewport}>
           {/* ========================================================= */}
-          {/* 4. PLAYER HEADER — ROUND AVATAR + STREAK / XP / COIN / LEVEL */}
+          {/* TOP PLAYER HEADER + COMPACT REWARD SUMMARY (SECTION 3)    */}
           {/* ========================================================= */}
           <View style={styles.header}>
             <View style={styles.headerLeftAndStats}>
@@ -525,76 +509,63 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 </View>
               </TouchableOpacity>
 
-              {/* Stats Bar: Sequence: 1. Streak -> 2. XP -> 3. Coin (Level removed) */}
-              <View style={styles.topStatsBar}>
-                {/* 1. STREAK */}
+              {/* Master Prompt Section 3: TOP REWARD SUMMARY */}
+              {/* Example: 200 COINS | 96 DAYS | 60 XP */}
+              <View style={styles.topRewardSummaryBar}>
+                {/* 1. COINS */}
                 <TouchableOpacity
-                  style={[
-                    styles.statChipStreak,
-                    isStreakBroken && styles.statChipStreakBroken,
-                  ]}
+                  style={styles.rewardSummarySegment}
+                  onPress={() => setActiveTab('store')}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="cash" size={16} color="#FFD700" style={{ marginRight: 6 }} />
+                  <Text style={styles.rewardSummaryValueGold}>{userCoins.toLocaleString()}</Text>
+                  <Text style={styles.rewardSummaryUnit}>COINS</Text>
+                </TouchableOpacity>
+
+                <View style={styles.rewardSummaryDivider} />
+
+                {/* 2. CURRENT STREAK */}
+                <TouchableOpacity
+                  style={styles.rewardSummarySegment}
                   onPress={() => {
                     if (isStreakBroken) {
                       setIsRestoreModalOpen(true);
                     } else {
                       Alert.alert(
                         '🔥 Daily Streak Active',
-                        `Current Streak: ${userStreak} Days\nKeep your streak active tomorrow by completing at least 1 game activity (12:00 AM – 11:59 PM)!`
+                        `Current Streak: ${userStreak} Days\nMaintain consecutive calendar days by completing at least 1 game activity daily!`
                       );
                     }
                   }}
                   activeOpacity={0.8}
                 >
-                  <LinearGradient
-                    colors={
-                      isStreakBroken
-                        ? ['rgba(255, 69, 58, 0.35)', 'rgba(255, 69, 58, 0.15)']
-                        : ['rgba(255, 106, 0, 0.22)', 'rgba(255, 60, 0, 0.08)']
-                    }
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.statChipGradient}
+                  <Ionicons
+                    name={isStreakBroken ? 'alert-circle' : 'flame'}
+                    size={16}
+                    color={isStreakBroken ? '#FF453A' : '#FF6A00'}
+                    style={{ marginRight: 6 }}
+                  />
+                  <Text
+                    style={[
+                      styles.rewardSummaryValueOrange,
+                      isStreakBroken && styles.rewardSummaryValueBroken,
+                    ]}
                   >
-                    <View
-                      style={[
-                        styles.statIconBadgeStreak,
-                        isStreakBroken && styles.statIconBadgeStreakBroken,
-                      ]}
-                    >
-                      <Ionicons
-                        name={isStreakBroken ? 'alert-circle' : 'flame'}
-                        size={15}
-                        color={isStreakBroken ? '#FF453A' : '#FF6A00'}
-                      />
-                    </View>
-                    <View style={styles.statContentWrap}>
-                      <Text
-                        style={[
-                          styles.statLabelStreak,
-                          isStreakBroken && styles.statLabelStreakBroken,
-                        ]}
-                      >
-                        {isStreakBroken ? 'STREAK BROKEN' : 'STREAK'}
-                      </Text>
-                      <Text
-                        style={[
-                          styles.statValueStreak,
-                          isStreakBroken && styles.statValueStreakBroken,
-                        ]}
-                      >
-                        {isStreakBroken ? 'RESTORE ⚡' : `${userStreak} Days`}
-                      </Text>
-                    </View>
-                  </LinearGradient>
+                    {isStreakBroken ? 'BROKEN' : userStreak}
+                  </Text>
+                  <Text style={styles.rewardSummaryUnit}>{isStreakBroken ? 'RESTORE' : 'DAYS'}</Text>
                 </TouchableOpacity>
 
-                {/* 2. XP */}
+                <View style={styles.rewardSummaryDivider} />
+
+                {/* 3. XP */}
                 <TouchableOpacity
-                  style={styles.statChipXp}
+                  style={styles.rewardSummarySegment}
                   onPress={() =>
                     Alert.alert(
                       '⚡ Player XP Balance',
-                      `Current XP: ${userXp.toLocaleString()} XP\n\nEarn XP by winning games. You can exchange your XP for Coins in the Coin Store!`,
+                      `Current XP: ${userXp.toLocaleString()} XP\nEarn XP by winning games. You can exchange your XP for Coins in the Coin Store!`,
                       [
                         { text: 'Close', style: 'cancel' },
                         { text: 'Open Coin Store', onPress: () => setActiveTab('store') },
@@ -603,42 +574,9 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                   }
                   activeOpacity={0.8}
                 >
-                  <LinearGradient
-                    colors={['rgba(0, 229, 255, 0.22)', 'rgba(0, 160, 255, 0.08)']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.statChipGradient}
-                  >
-                    <View style={styles.statIconBadgeXp}>
-                      <Ionicons name="flash" size={15} color="#00E5FF" />
-                    </View>
-                    <View style={styles.statContentWrap}>
-                      <Text style={styles.statLabelXp}>XP</Text>
-                      <Text style={styles.statValueXp}>{userXp.toLocaleString()}</Text>
-                    </View>
-                  </LinearGradient>
-                </TouchableOpacity>
-
-                {/* 3. COIN */}
-                <TouchableOpacity
-                  style={styles.statChipCoin}
-                  onPress={() => setActiveTab('store')}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={['rgba(255, 215, 0, 0.22)', 'rgba(255, 170, 0, 0.08)']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.statChipGradient}
-                  >
-                    <View style={styles.statIconBadgeCoin}>
-                      <Ionicons name="cash" size={14} color="#FFD700" />
-                    </View>
-                    <View style={styles.statContentWrap}>
-                      <Text style={styles.statLabelCoin}>COIN</Text>
-                      <Text style={styles.statValueCoin}>{userCoins.toLocaleString()}</Text>
-                    </View>
-                  </LinearGradient>
+                  <Ionicons name="flash" size={16} color="#00E5FF" style={{ marginRight: 6 }} />
+                  <Text style={styles.rewardSummaryValueCyan}>{userXp.toLocaleString()}</Text>
+                  <Text style={styles.rewardSummaryUnit}>XP</Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -650,7 +588,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 onPress={() =>
                   Alert.alert(
                     'Player Hub // Status',
-                    `Player: ${playerName}\nStreak: ${isStreakBroken ? 'Broken' : `${userStreak} Days`}\nXP: ${userXp.toLocaleString()} XP\nCoins: ${userCoins.toLocaleString()} Coins`
+                    `Player: ${playerName}\nCoins: ${userCoins.toLocaleString()} Coins\nStreak: ${isStreakBroken ? 'Broken' : `${userStreak} Days`}\nXP: ${userXp.toLocaleString()} XP`
                   )
                 }
                 activeOpacity={0.75}
@@ -671,76 +609,8 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
             </View>
           </View>
 
-          {/* MOBILE COMPACT CHAT SWITCHER (Only visible on screens < 768px) */}
-          {isMobileLayout && (
-            <View style={styles.mobileSegmentBar}>
-              <TouchableOpacity
-                style={[styles.mobileSegmentBtn, !activeMobileChat && styles.mobileSegmentBtnActive]}
-                onPress={() => setActiveMobileChat(null)}
-                activeOpacity={0.75}
-              >
-                <Ionicons
-                  name="game-controller"
-                  size={13}
-                  color={!activeMobileChat ? '#050705' : colors.textSecondary}
-                />
-                <Text style={[styles.mobileSegmentText, !activeMobileChat && styles.mobileSegmentTextActive]}>
-                  Dashboard
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.mobileSegmentBtn, activeMobileChat === 'left' && styles.mobileSegmentBtnActive]}
-                onPress={() => setActiveMobileChat('left')}
-                activeOpacity={0.75}
-              >
-                <Ionicons
-                  name="hardware-chip"
-                  size={13}
-                  color={activeMobileChat === 'left' ? '#050705' : colors.primary}
-                />
-                <Text style={[styles.mobileSegmentText, activeMobileChat === 'left' && styles.mobileSegmentTextActive]}>
-                  AI Co-Pilot
-                </Text>
-                <View style={styles.mobileGreenDot} />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.mobileSegmentBtn, activeMobileChat === 'right' && styles.mobileSegmentBtnActive]}
-                onPress={() => setActiveMobileChat('right')}
-                activeOpacity={0.75}
-              >
-                <Ionicons
-                  name="radio"
-                  size={13}
-                  color={activeMobileChat === 'right' ? '#050705' : colors.orangeAccent}
-                />
-                <Text style={[styles.mobileSegmentText, activeMobileChat === 'right' && styles.mobileSegmentTextActive]}>
-                  Global Comms
-                </Text>
-                <View style={styles.mobileOrangeDot} />
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* Main Content Area / Mobile Chat Switching */}
-          {isMobileLayout && activeMobileChat === 'left' ? (
-            <View style={styles.mobileChatContainer}>
-              <LeftChatPanel
-                user={user}
-                isMobile
-                onCloseMobile={() => setActiveMobileChat(null)}
-              />
-            </View>
-          ) : isMobileLayout && activeMobileChat === 'right' ? (
-            <View style={styles.mobileChatContainer}>
-              <RightChatPanel
-                user={user}
-                isMobile
-                onCloseMobile={() => setActiveMobileChat(null)}
-              />
-            </View>
-          ) : activeTab === 'profile' ? (
+          {/* Main Full-Width Content Area */}
+          {activeTab === 'profile' ? (
             <ProfileScreen
               onNavigateHome={() => setActiveTab('home')}
               onNavigateGames={() => setActiveTab('games')}
@@ -755,7 +625,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.scrollContent}
             >
-          <View style={styles.dashboardInner}>
+              <View style={styles.dashboardInner}>
           {/* Brand Taglines Banner */}
           <View style={styles.brandTaglineBar}>
             <View style={styles.brandTaglineDot} />
@@ -962,6 +832,266 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 <Ionicons name="close-circle" size={18} color={colors.textSecondary} />
               </TouchableOpacity>
             )}
+          </View>
+
+          {/* ========================================================= */}
+          {/* MASTER PROMPT SECTION 4: DAILY QUEST SECTION              */}
+          {/* ========================================================= */}
+          <View style={styles.dailyQuestSection}>
+            <View style={styles.dailyQuestHeaderRow}>
+              <View style={styles.dailyQuestTitleBlock}>
+                <View style={styles.dailyQuestEyebrowRow}>
+                  <Text style={styles.dailyQuestEyebrow}>DAILY QUEST</Text>
+                  <View style={styles.dailyQuestCountdownBadge}>
+                    <Ionicons name="time-outline" size={12} color="#FF9500" style={{ marginRight: 4 }} />
+                    <Text style={styles.dailyQuestCountdownText}>Resets in {resetCountdown}</Text>
+                  </View>
+                </View>
+                <Text style={styles.dailyQuestHeading}>Daily Objectives & Verified Rewards</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.dailyQuestViewAllBtn}
+                onPress={() => setActiveTab('quests')}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.dailyQuestViewAllText}>VIEW ALL ›</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.dailyQuestCardsStack}>
+              {dailyQuests.map((quest) => {
+                const isComplete = quest.current >= quest.target;
+                const progressRatio = Math.min(1, quest.target > 0 ? quest.current / quest.target : 0);
+                const progressPercent = Math.round(progressRatio * 100);
+
+                return (
+                  <View key={quest.id} style={styles.questCardModern}>
+                    <View style={styles.questCardLeftContent}>
+                      <View
+                        style={[
+                          styles.questCardIconCircle,
+                          isComplete && styles.questCardIconCircleComplete,
+                        ]}
+                      >
+                        <Ionicons
+                          name={quest.icon || 'trophy'}
+                          size={22}
+                          color={isComplete ? '#39FF14' : colors.primary}
+                        />
+                      </View>
+                      <View style={styles.questCardTextWrap}>
+                        <View style={styles.questCardTitleRow}>
+                          <Text style={styles.questCardTitleText}>{quest.title}</Text>
+                          <View style={styles.questRewardMiniBadge}>
+                            <Text style={styles.questRewardMiniText}>
+                              +{quest.rewardXp} XP • +{quest.rewardCoins} COINS
+                            </Text>
+                          </View>
+                        </View>
+                        <Text style={styles.questCardDescText}>{quest.desc}</Text>
+
+                        {/* Progress Bar & Counter */}
+                        <View style={styles.questProgressContainerNew}>
+                          <View style={styles.questProgressBarNew}>
+                            <View
+                              style={[
+                                styles.questProgressFillNew,
+                                {
+                                  width: `${progressPercent}%`,
+                                  backgroundColor: isComplete ? '#39FF14' : '#00E5FF',
+                                },
+                              ]}
+                            />
+                          </View>
+                          <Text style={styles.questProgressFraction}>
+                            {quest.current}/{quest.target}
+                          </Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    {/* Action Button: Play Now or Claim Reward or Completed */}
+                    <View style={styles.questCardActionContainer}>
+                      {quest.claimed ? (
+                        <View style={styles.questClaimedPill}>
+                          <Ionicons name="checkmark-circle" size={15} color="#39FF14" style={{ marginRight: 4 }} />
+                          <Text style={styles.questClaimedPillText}>CLAIMED</Text>
+                        </View>
+                      ) : isComplete ? (
+                        <TouchableOpacity
+                          style={styles.questClaimRewardBtn}
+                          onPress={() => handleClaimDailyQuestReward(quest.id)}
+                          activeOpacity={0.85}
+                        >
+                          <LinearGradient
+                            colors={['#39FF14', '#00E5FF']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.questClaimRewardGradient}
+                          >
+                            <Ionicons name="gift" size={15} color="#050705" style={{ marginRight: 5 }} />
+                            <Text style={styles.questClaimRewardText}>CLAIM REWARD</Text>
+                          </LinearGradient>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.questPlayNowBtn}
+                          onPress={() => {
+                            setTargetLevelToPlay(unlockedLevel);
+                            setIsTargetGameOpen(true);
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name="play" size={14} color="#050705" style={{ marginRight: 4 }} />
+                          <Text style={styles.questPlayNowText}>PLAY NOW</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* ========================================================= */}
+          {/* MASTER PROMPT SECTION 5: SEQUENTIAL GAME LEVEL TRACK      */}
+          {/* ========================================================= */}
+          <View style={styles.gameLevelsSection}>
+            <View style={styles.gameLevelsHeaderRow}>
+              <View style={styles.gameLevelsTitleBlock}>
+                <View style={styles.gameLevelsEyebrowRow}>
+                  <Text style={styles.gameLevelsEyebrow}>SPEED MATH DUELS</Text>
+                  <View style={styles.gameLevelsProgressBadge}>
+                    <Ionicons name="shield-checkmark" size={12} color="#39FF14" style={{ marginRight: 4 }} />
+                    <Text style={styles.gameLevelsProgressText}>
+                      Level {unlockedLevel} / 10 Unlocked
+                    </Text>
+                  </View>
+                </View>
+                <Text style={styles.gameLevelsHeading}>Sequential Level Track (Levels 1–10)</Text>
+                <Text style={styles.gameLevelsSubtitle}>
+                  Solve all target math values within 30 seconds. Complete each level sequentially to unlock the next!
+                </Text>
+              </View>
+            </View>
+
+            <View style={styles.gameLevelsGrid}>
+              {gameLevels.map((lvl) => {
+                return (
+                  <View
+                    key={`track_lvl_${lvl.level}`}
+                    style={[
+                      styles.levelCard,
+                      lvl.isCompleted && styles.levelCardCompleted,
+                      lvl.isCurrent && styles.levelCardCurrent,
+                      lvl.isLocked && styles.levelCardLocked,
+                    ]}
+                  >
+                    {/* Top Row: Level Badge & Status Pill */}
+                    <View style={styles.levelCardTopRow}>
+                      <View
+                        style={[
+                          styles.levelNumberTag,
+                          lvl.isCompleted && styles.levelNumberTagCompleted,
+                          lvl.isCurrent && styles.levelNumberTagCurrent,
+                          lvl.isLocked && styles.levelNumberTagLocked,
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.levelNumberTagText,
+                            lvl.isCurrent && styles.levelNumberTagTextCurrent,
+                          ]}
+                        >
+                          LEVEL {lvl.level}
+                        </Text>
+                      </View>
+
+                      {lvl.isCompleted ? (
+                        <View style={styles.levelStatusBadgeCompleted}>
+                          <Ionicons name="checkmark-circle" size={14} color="#39FF14" style={{ marginRight: 3 }} />
+                          <Text style={styles.levelStatusTextCompleted}>COMPLETED</Text>
+                        </View>
+                      ) : lvl.isCurrent ? (
+                        <View style={styles.levelStatusBadgeCurrent}>
+                          <Ionicons name="flash" size={14} color="#39FF14" style={{ marginRight: 3 }} />
+                          <Text style={styles.levelStatusTextCurrent}>READY TO PLAY</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.levelStatusBadgeLocked}>
+                          <Ionicons name="lock-closed" size={13} color="#777777" style={{ marginRight: 3 }} />
+                          <Text style={styles.levelStatusTextLocked}>LOCKED</Text>
+                        </View>
+                      )}
+                    </View>
+
+                    {/* Middle Info */}
+                    <View style={styles.levelCardMiddle}>
+                      <Text style={[styles.levelCardName, lvl.isLocked && styles.levelCardNameLocked]}>
+                        {lvl.title}
+                      </Text>
+                      <Text style={styles.levelCardSub}>
+                        {lvl.isLocked ? `Complete Level ${lvl.level - 1} to Unlock` : lvl.subtitle}
+                      </Text>
+
+                      {/* Rewards */}
+                      <View style={styles.levelRewardPillsRow}>
+                        <View style={styles.levelRewardXpPill}>
+                          <Ionicons name="flash" size={11} color="#00E5FF" style={{ marginRight: 3 }} />
+                          <Text style={styles.levelRewardXpText}>+{lvl.xpReward} XP</Text>
+                        </View>
+                        <View style={styles.levelRewardCoinPill}>
+                          <Ionicons name="cash" size={11} color="#FFD700" style={{ marginRight: 3 }} />
+                          <Text style={styles.levelRewardCoinText}>+{lvl.coinReward} Coins</Text>
+                        </View>
+                        <View style={styles.levelDiffTag}>
+                          <Text style={styles.levelDiffTagText}>{lvl.difficulty}</Text>
+                        </View>
+                      </View>
+                    </View>
+
+                    {/* Bottom Action Button */}
+                    <View style={styles.levelCardBottom}>
+                      {lvl.isLocked ? (
+                        <TouchableOpacity
+                          style={styles.levelLockedBtn}
+                          disabled={true}
+                          activeOpacity={1}
+                        >
+                          <Ionicons name="lock-closed" size={14} color="#777777" style={{ marginRight: 6 }} />
+                          <Text style={styles.levelLockedBtnText}>LOCKED</Text>
+                        </TouchableOpacity>
+                      ) : lvl.isCurrent ? (
+                        <TouchableOpacity
+                          style={styles.levelPlayCurrentBtn}
+                          onPress={() => handlePlayLevel(lvl.level)}
+                          activeOpacity={0.85}
+                        >
+                          <LinearGradient
+                            colors={['#39FF14', '#00E5FF']}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.levelPlayCurrentGradient}
+                          >
+                            <Ionicons name="play" size={14} color="#050705" style={{ marginRight: 6 }} />
+                            <Text style={styles.levelPlayCurrentText}>PLAY LEVEL {lvl.level}</Text>
+                          </LinearGradient>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={styles.levelReplayBtn}
+                          onPress={() => handlePlayLevel(lvl.level)}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name="refresh" size={14} color="#39FF14" style={{ marginRight: 6 }} />
+                          <Text style={styles.levelReplayText}>REPLAY LEVEL {lvl.level}</Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
           </View>
 
           {/* ========================================================= */}
@@ -1328,88 +1458,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
             </ScrollView>
           </View>
 
-          {/* ========================================================= */}
-          {/* 12. DAILY MISSION PANEL — TODAY'S SOLO QUEST             */}
-          {/* ========================================================= */}
-          <View style={styles.sectionContainer}>
-            <View style={styles.sectionHeaderRow}>
-              <View style={styles.sectionTitleBlock}>
-                <Text style={styles.sectionEyebrow}>DAILY OBJECTIVES</Text>
-                <Text style={styles.sectionTitle}>TODAY'S SOLO QUEST</Text>
-                <Text style={styles.sectionSubtitle}>
-                  One challenge. One reward. Your next achievement.
-                </Text>
-              </View>
-              <Text style={styles.resetTimerText}>Resets in 6h 24m</Text>
-            </View>
 
-            {quests.map((quest) => {
-              const isCompleted = quest.current >= quest.target;
-              return (
-                <View key={quest.id} style={styles.questCard}>
-                  <View style={styles.questIconContainer}>
-                    <Ionicons
-                      name={quest.icon}
-                      size={22}
-                      color={quest.claimed ? colors.textMuted : colors.primary}
-                    />
-                  </View>
-
-                  <View style={styles.questInfo}>
-                    <Text
-                      style={[
-                        styles.questTitle,
-                        quest.claimed && styles.questTitleClaimed,
-                      ]}
-                    >
-                      {quest.title}
-                    </Text>
-                    <Text style={styles.questDesc}>{quest.desc}</Text>
-
-                    {/* Progress track */}
-                    <View style={styles.questProgressContainer}>
-                      <View style={styles.questProgressBar}>
-                        <View
-                          style={[
-                            styles.questProgressFill,
-                            {
-                              width: `${Math.min(
-                                100,
-                                (quest.current / quest.target) * 100
-                              )}%`,
-                            },
-                          ]}
-                        />
-                      </View>
-                      <Text style={styles.questProgressText}>
-                        {quest.current}/{quest.target}
-                      </Text>
-                    </View>
-                  </View>
-
-                  <TouchableOpacity
-                    style={[
-                      styles.questRewardBtn,
-                      isCompleted && !quest.claimed && styles.questRewardBtnReady,
-                      quest.claimed && styles.questRewardBtnClaimed,
-                    ]}
-                    disabled={!isCompleted || quest.claimed}
-                    onPress={() => handleClaimQuest(quest.id, quest.rewardXp)}
-                    activeOpacity={0.8}
-                  >
-                    <Text
-                      style={[
-                        styles.questRewardText,
-                        isCompleted && !quest.claimed && styles.questRewardTextReady,
-                      ]}
-                    >
-                      {quest.claimed ? '✓ Done' : quest.reward}
-                    </Text>
-                  </TouchableOpacity>
-                </View>
-              );
-            })}
-          </View>
 
           {/* ========================================================= */}
           {/* TRENDING ADVENTURES SECTION                              */}
@@ -1468,144 +1517,103 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       </ScrollView>
     )}
 
-          {/* 13. BOTTOM NAVIGATION — FLOATING GAMING DOCK */}
-          {(!isMobileLayout || !activeMobileChat) && (
-            <View style={styles.bottomNavDock}>
-              <TouchableOpacity
-                style={[styles.navItem, activeTab === 'home' && styles.navItemActive]}
-                onPress={() => setActiveTab('home')}
-                activeOpacity={0.75}
+          {/* 13. BOTTOM NAVIGATION — CLEAN GAMING DOCK (SECTION 6) */}
+          <View style={styles.bottomNavDock}>
+            <TouchableOpacity
+              style={[styles.navItem, activeTab === 'home' && styles.navItemActive]}
+              onPress={() => setActiveTab('home')}
+              activeOpacity={0.75}
+            >
+              <Ionicons
+                name={activeTab === 'home' ? 'home' : 'home-outline'}
+                size={20}
+                color={activeTab === 'home' ? colors.primary : colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.navText,
+                  activeTab === 'home' && styles.navTextActive,
+                ]}
               >
+                Home
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.navItem, activeTab === 'games' && styles.navItemActive]}
+              onPress={() => setActiveTab('games')}
+              activeOpacity={0.75}
+            >
+              <Ionicons
+                name={activeTab === 'games' ? 'grid' : 'grid-outline'}
+                size={20}
+                color={activeTab === 'games' ? colors.primary : colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.navText,
+                  activeTab === 'games' && styles.navTextActive,
+                ]}
+              >
+                Games
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.navItem, activeTab === 'quests' && styles.navItemActive]}
+              onPress={() => setActiveTab('quests')}
+              activeOpacity={0.75}
+            >
+              <View style={styles.questNavIconWrap}>
                 <Ionicons
-                  name={activeTab === 'home' ? 'home' : 'home-outline'}
+                  name={activeTab === 'quests' ? 'trophy' : 'trophy-outline'}
                   size={20}
-                  color={activeTab === 'home' ? colors.primary : colors.textSecondary}
+                  color={activeTab === 'quests' ? colors.primary : colors.textSecondary}
                 />
-                <Text
-                  style={[
-                    styles.navText,
-                    activeTab === 'home' && styles.navTextActive,
-                  ]}
-                >
-                  Home
-                </Text>
-              </TouchableOpacity>
+                <View style={styles.questNavOrangeDot} />
+              </View>
+              <Text
+                style={[
+                  styles.navText,
+                  activeTab === 'quests' && styles.navTextActive,
+                ]}
+              >
+                Quests
+              </Text>
+            </TouchableOpacity>
 
+            <TouchableOpacity
+              style={[styles.navItem, activeTab === 'profile' && styles.navItemActive]}
+              onPress={() => setActiveTab('profile')}
+              activeOpacity={0.75}
+            >
+              <Ionicons
+                name={activeTab === 'profile' ? 'person' : 'person-outline'}
+                size={20}
+                color={activeTab === 'profile' ? colors.primary : colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.navText,
+                  activeTab === 'profile' && styles.navTextActive,
+                ]}
+              >
+                Profile
+              </Text>
+            </TouchableOpacity>
+
+            {onNavigateToLogin && (
               <TouchableOpacity
-                style={[styles.navItem, activeTab === 'games' && styles.navItemActive]}
-                onPress={() => {
-                  setActiveTab('games');
-                }}
+                style={styles.navItem}
+                onPress={onNavigateToLogin}
                 activeOpacity={0.75}
               >
-                <Ionicons
-                  name={activeTab === 'games' ? 'grid' : 'grid-outline'}
-                  size={20}
-                  color={activeTab === 'games' ? colors.primary : colors.textSecondary}
-                />
-                <Text
-                  style={[
-                    styles.navText,
-                    activeTab === 'games' && styles.navTextActive,
-                  ]}
-                >
-                  Games
-                </Text>
+                <Ionicons name="log-out-outline" size={20} color={colors.textSecondary} />
+                <Text style={styles.navText}>Sign Out</Text>
               </TouchableOpacity>
-
-              {/* 3. COIN STORE TAB */}
-              <TouchableOpacity
-                style={[styles.navItem, activeTab === 'store' && styles.navItemActive]}
-                onPress={() => setActiveTab('store')}
-                activeOpacity={0.75}
-              >
-                <Ionicons
-                  name={activeTab === 'store' ? 'cash' : 'cash-outline'}
-                  size={20}
-                  color={activeTab === 'store' ? '#FFD700' : colors.textSecondary}
-                />
-                <Text
-                  style={[
-                    styles.navText,
-                    activeTab === 'store' && { color: '#FFD700', fontWeight: '900' },
-                  ]}
-                >
-                  Store
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.navItem, activeTab === 'quests' && styles.navItemActive]}
-                onPress={() => {
-                  setActiveTab('quests');
-                }}
-                activeOpacity={0.75}
-              >
-                <View style={styles.questNavIconWrap}>
-                  <Ionicons
-                    name={activeTab === 'quests' ? 'trophy' : 'trophy-outline'}
-                    size={20}
-                    color={activeTab === 'quests' ? colors.primary : colors.textSecondary}
-                  />
-                  {/* Orange alert indicator for active quests */}
-                  <View style={styles.questNavOrangeDot} />
-                </View>
-                <Text
-                  style={[
-                    styles.navText,
-                    activeTab === 'quests' && styles.navTextActive,
-                  ]}
-                >
-                  Quests
-                </Text>
-              </TouchableOpacity>
-
-              {/* 4. PLAYER PROFILE TAB */}
-              <TouchableOpacity
-                style={[styles.navItem, activeTab === 'profile' && styles.navItemActive]}
-                onPress={() => setActiveTab('profile')}
-                activeOpacity={0.75}
-              >
-                <Ionicons
-                  name={activeTab === 'profile' ? 'person' : 'person-outline'}
-                  size={20}
-                  color={activeTab === 'profile' ? colors.primary : colors.textSecondary}
-                />
-                <Text
-                  style={[
-                    styles.navText,
-                    activeTab === 'profile' && styles.navTextActive,
-                  ]}
-                >
-                  Profile
-                </Text>
-              </TouchableOpacity>
-
-              {onNavigateToLogin && (
-                <TouchableOpacity
-                  style={styles.navItem}
-                  onPress={onNavigateToLogin}
-                  activeOpacity={0.75}
-                >
-                  <Ionicons name="log-out-outline" size={20} color={colors.textSecondary} />
-                  <Text style={styles.navText}>Sign Out</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
+            )}
+          </View>
         </View>
-
-        {/* ========================================================= */}
-        {/* RIGHT CHAT PANEL: SMART COMPACT GLOBAL SQUAD COMMS       */}
-        {/* ========================================================= */}
-        {!isMobileLayout && (
-          <RightChatPanel
-            user={user}
-            width={chatPanelWidth}
-            isCollapsed={rightCollapsed}
-            onToggleCollapse={() => setRightCollapsed(!rightCollapsed)}
-          />
-        )}
       </View>
 
       {/* Cinematic Game Details Modal */}
@@ -1626,9 +1634,10 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
         />
       )}
 
-      {/* Target Number Interactive Game Modal */}
+      {/* Target Number Interactive Game Modal with Sequential Level Support */}
       <TargetNumberGameModal
         visible={isTargetGameOpen}
+        initialLevel={targetLevelToPlay}
         onClose={() => setIsTargetGameOpen(false)}
         onSessionComplete={handleTransactionsChanged}
       />
@@ -1669,75 +1678,545 @@ const isSmallMobile = width < 380;
 const styles = StyleSheet.create({
   appShell: {
     flex: 1,
-    flexDirection: 'row',
     width: '100%',
     height: '100%',
-    overflow: 'hidden',
+    backgroundColor: '#050705',
   },
   centerViewport: {
     flex: 1,
-    minWidth: 0,
+    width: '100%',
     height: '100%',
     display: 'flex',
     flexDirection: 'column',
     position: 'relative',
-    overflow: 'hidden',
+    backgroundColor: 'transparent',
   },
-  mobileSegmentBar: {
+  topRewardSummaryBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
+    backgroundColor: '#0D140F',
+    borderWidth: 1.5,
+    borderColor: 'rgba(57, 255, 20, 0.28)',
+    borderRadius: 14,
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: '#070C08',
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(57, 255, 20, 0.12)',
+    paddingVertical: 7,
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 0 14px rgba(57, 255, 20, 0.12)',
+        }
+      : {}),
+  },
+  rewardSummarySegment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  rewardSummaryValueGold: {
+    color: '#FFD700',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  rewardSummaryValueOrange: {
+    color: '#FF9500',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  rewardSummaryValueBroken: {
+    color: '#FF453A',
+  },
+  rewardSummaryValueCyan: {
+    color: '#00E5FF',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.3,
+  },
+  rewardSummaryUnit: {
+    color: '#8A9E8D',
+    fontSize: 10,
+    fontWeight: '800',
+    marginLeft: 4,
+    letterSpacing: 0.4,
+  },
+  rewardSummaryDivider: {
+    width: 1,
+    height: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.15)',
+    marginHorizontal: 4,
+  },
+  dailyQuestSection: {
+    marginBottom: spacing.md,
+  },
+  dailyQuestHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  dailyQuestTitleBlock: {
+    flex: 1,
+  },
+  dailyQuestEyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 2,
+  },
+  dailyQuestEyebrow: {
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  dailyQuestCountdownBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 149, 0, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 149, 0, 0.3)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  dailyQuestCountdownText: {
+    color: '#FF9500',
+    fontSize: 10,
+    fontWeight: '700',
+  },
+  dailyQuestHeading: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  dailyQuestViewAllBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  dailyQuestViewAllText: {
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  dailyQuestCardsStack: {
+    gap: 10,
+  },
+  questCardModern: {
+    backgroundColor: '#0E150F',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.22)',
+    borderRadius: 14,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 10,
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+        }
+      : {}),
+  },
+  questCardLeftContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 240,
+  },
+  questCardIconCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(57, 255, 20, 0.1)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(57, 255, 20, 0.35)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  questCardIconCircleComplete: {
+    backgroundColor: 'rgba(57, 255, 20, 0.22)',
+    borderColor: '#39FF14',
+  },
+  questCardTextWrap: {
+    flex: 1,
+  },
+  questCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 2,
+  },
+  questCardTitleText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  questRewardMiniBadge: {
+    backgroundColor: 'rgba(255, 215, 0, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.3)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  questRewardMiniText: {
+    color: '#FFD700',
+    fontSize: 9.5,
+    fontWeight: '800',
+  },
+  questCardDescText: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    marginBottom: 6,
+  },
+  questProgressContainerNew: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
   },
-  mobileSegmentBtn: {
+  questProgressBarNew: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    height: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 3,
+    overflow: 'hidden',
   },
-  mobileSegmentBtnActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+  questProgressFillNew: {
+    height: '100%',
+    borderRadius: 3,
   },
-  mobileSegmentText: {
+  questProgressFraction: {
+    color: colors.textSecondary,
     fontSize: 11,
     fontWeight: '700',
-    color: colors.textSecondary,
-    marginLeft: 5,
   },
-  mobileSegmentTextActive: {
+  questCardActionContainer: {
+    alignItems: 'flex-end',
+    minWidth: 110,
+  },
+  questClaimedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.3)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  questClaimedPillText: {
+    color: '#39FF14',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  questClaimRewardBtn: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  questClaimRewardGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+  },
+  questClaimRewardText: {
+    color: '#050705',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  questPlayNowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 8,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  questPlayNowText: {
+    color: '#050705',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  gameLevelsSection: {
+    marginBottom: spacing.lg,
+  },
+  gameLevelsHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  gameLevelsTitleBlock: {
+    flex: 1,
+  },
+  gameLevelsEyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 2,
+  },
+  gameLevelsEyebrow: {
+    color: colors.primary,
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+  },
+  gameLevelsProgressBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.35)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  gameLevelsProgressText: {
+    color: colors.primary,
+    fontSize: 10.5,
+    fontWeight: '800',
+  },
+  gameLevelsHeading: {
+    color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '900',
+  },
+  gameLevelsSubtitle: {
+    color: colors.textSecondary,
+    fontSize: 11.5,
+    marginTop: 2,
+  },
+  gameLevelsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  levelCard: {
+    width: '48.5%',
+    minWidth: 280,
+    backgroundColor: '#0B120C',
+    borderWidth: 1.5,
+    borderColor: 'rgba(57, 255, 20, 0.18)',
+    borderRadius: 14,
+    padding: 12,
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 4px 14px rgba(0, 0, 0, 0.5)',
+        }
+      : {}),
+  },
+  levelCardCompleted: {
+    backgroundColor: '#07150A',
+    borderColor: 'rgba(57, 255, 20, 0.45)',
+  },
+  levelCardCurrent: {
+    backgroundColor: '#0F1E12',
+    borderColor: '#39FF14',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 0 16px rgba(57, 255, 20, 0.25)',
+        }
+      : {}),
+  },
+  levelCardLocked: {
+    backgroundColor: '#090D0A',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    opacity: 0.65,
+  },
+  levelCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  levelNumberTag: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  levelNumberTagCompleted: {
+    backgroundColor: 'rgba(57, 255, 20, 0.15)',
+  },
+  levelNumberTagCurrent: {
+    backgroundColor: '#39FF14',
+  },
+  levelNumberTagLocked: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  levelNumberTagText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  levelNumberTagTextCurrent: {
     color: '#050705',
     fontWeight: '900',
   },
-  mobileGreenDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.primary,
-    marginLeft: 5,
+  levelStatusBadgeCompleted: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.15)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
-  mobileOrangeDot: {
-    width: 5,
-    height: 5,
-    borderRadius: 2.5,
-    backgroundColor: colors.orangeAccent,
-    marginLeft: 5,
+  levelStatusTextCompleted: {
+    color: '#39FF14',
+    fontSize: 9.5,
+    fontWeight: '900',
   },
-  mobileChatContainer: {
-    flex: 1,
-    width: '100%',
-    height: '100%',
+  levelStatusBadgeCurrent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.22)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  levelStatusTextCurrent: {
+    color: '#39FF14',
+    fontSize: 9.5,
+    fontWeight: '900',
+  },
+  levelStatusBadgeLocked: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  levelStatusTextLocked: {
+    color: '#777777',
+    fontSize: 9.5,
+    fontWeight: '800',
+  },
+  levelCardMiddle: {
+    marginBottom: 10,
+  },
+  levelCardName: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '900',
+    marginBottom: 2,
+  },
+  levelCardNameLocked: {
+    color: '#888888',
+  },
+  levelCardSub: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    marginBottom: 8,
+  },
+  levelRewardPillsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  levelRewardXpPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 229, 255, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 229, 255, 0.25)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  levelRewardXpText: {
+    color: '#00E5FF',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  levelRewardCoinPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.25)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  levelRewardCoinText: {
+    color: '#FFD700',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  levelDiffTag: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  levelDiffTagText: {
+    color: colors.textSecondary,
+    fontSize: 9.5,
+    fontWeight: '700',
+  },
+  levelCardBottom: {
+    marginTop: 4,
+  },
+  levelLockedBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  levelLockedBtnText: {
+    color: '#777777',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  levelPlayCurrentBtn: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  levelPlayCurrentGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  levelPlayCurrentText: {
+    color: '#050705',
+    fontSize: 11.5,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  levelReplayBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.35)',
+    paddingVertical: 8,
+    borderRadius: 8,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  levelReplayText: {
+    color: '#39FF14',
+    fontSize: 11,
+    fontWeight: '800',
   },
   header: {
     flexDirection: 'row',

@@ -206,6 +206,7 @@ function generateProblem(op, level) {
 
 export const TargetNumberGameModal = ({
   visible,
+  initialLevel = 1,
   onClose,
   onSessionComplete,
 }) => {
@@ -216,8 +217,15 @@ export const TargetNumberGameModal = ({
   // Game flow states: 'select_mode' | 'playing' | 'level_complete' | 'game_over'
   const [gameState, setGameState] = useState('select_mode');
   const [selectedOperator, setSelectedOperator] = useState('+');
-  const [currentLevel, setCurrentLevel] = useState(1);
+  const [currentLevel, setCurrentLevel] = useState(initialLevel || 1);
   const [unlockedLevels, setUnlockedLevels] = useState({ '+': 1, '-': 1, '*': 1, '%': 1 });
+
+  // Sync currentLevel when initialLevel changes or modal opens
+  useEffect(() => {
+    if (visible && initialLevel) {
+      setCurrentLevel(initialLevel);
+    }
+  }, [visible, initialLevel]);
 
   // Active round state
   const [sessionId, setSessionId] = useState(null);
@@ -579,6 +587,16 @@ export const TargetNumberGameModal = ({
             answersHistory: updatedHistory,
             completedAt: new Date().toISOString(),
           });
+
+          // Unlock next level sequentially in database
+          try {
+            await GamePersistenceService.unlockNextLevel(user?.id, selectedOperator, currentLevel);
+            await GamingActivityService.unlockNextLevel(user?.id, currentLevel);
+            const freshUnlocked = await GamePersistenceService.getUnlockedLevels(user?.id);
+            setUnlockedLevels(freshUnlocked);
+          } catch (unlockErr) {
+            console.warn('Error unlocking next level:', unlockErr);
+          }
 
           // Award XP and coins to user session
           const xpEarned = currentLevelConfig.xpReward;
@@ -1037,7 +1055,7 @@ export const TargetNumberGameModal = ({
 
                 {/* Actions: Advance Level or Replay */}
                 <View style={styles.endActionsRow}>
-                  {currentLevel < 3 ? (
+                  {currentLevel < 10 ? (
                     <TouchableOpacity
                       style={styles.nextLevelBtn}
                       onPress={() => {
@@ -1054,13 +1072,13 @@ export const TargetNumberGameModal = ({
                         style={styles.endActionGradient}
                       >
                         <Text style={styles.endActionText}>
-                          ADVANCE TO LEVEL {currentLevel + 1} ({LEVEL_CONFIGS[currentLevel + 1].totalQuestions} VALUES IN 30s) →
+                          ADVANCE TO LEVEL {currentLevel + 1} ({LEVEL_CONFIGS[currentLevel + 1]?.totalQuestions || 15} VALUES IN 30s) →
                         </Text>
                       </LinearGradient>
                     </TouchableOpacity>
                   ) : (
                     <View style={styles.championBadge}>
-                      <Text style={styles.championBadgeText}>👑 ALL 3 TARGET NUMBER LEVELS MASTERED!</Text>
+                      <Text style={styles.championBadgeText}>👑 ALL 10 TARGET NUMBER LEVELS MASTERED!</Text>
                     </View>
                   )}
 

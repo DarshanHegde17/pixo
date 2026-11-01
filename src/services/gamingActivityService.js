@@ -9,6 +9,8 @@ const STORAGE_KEYS = {
   STREAK_RESTORATIONS_PREFIX: '@soloplay_streak_restorations_',
   INITIALIZED_FLAG_PREFIX: '@soloplay_data_initialized_',
   TRANSACTIONS_PREFIX: '@pixo_reward_transactions_',
+  DAILY_QUESTS_PREFIX: '@pixo_daily_quests_',
+  UNLOCKED_LEVEL_PREFIX: '@pixo_game_unlocked_level_',
 };
 
 // Concurrency mutex locks
@@ -19,6 +21,58 @@ let isExchangingLock = false;
  * Standard milestones for streak badges
  */
 export const STREAK_MILESTONES = [3, 7, 14, 30, 60, 100];
+
+/**
+ * 3 Daily Quests per Master Prompt Section 4
+ */
+export const DEFAULT_DAILY_QUESTS = [
+  {
+    id: 'quest_1',
+    title: 'Win 2 Sprint Duels in a Row',
+    desc: 'Achieve 2 consecutive wins in Speed Math Sprint',
+    target: 2,
+    rewardXp: 25,
+    rewardCoins: 5,
+    icon: 'flash',
+    type: 'consecutive_wins',
+  },
+  {
+    id: 'quest_2',
+    title: 'Play Any 2 Duels',
+    desc: 'Complete 2 game battles across any difficulty',
+    target: 2,
+    rewardXp: 20,
+    rewardCoins: 4,
+    icon: 'game-controller',
+    type: 'games_played',
+  },
+  {
+    id: 'quest_3',
+    title: 'Win 2 Ken-Ken Duels in a Row',
+    desc: 'Win 2 consecutive calculation battles with zero mistakes',
+    target: 2,
+    rewardXp: 30,
+    rewardCoins: 6,
+    icon: 'trophy',
+    type: 'consecutive_wins',
+  },
+];
+
+/**
+ * Sequential 10 Game Levels Config per Master Prompt Section 5
+ */
+export const GAME_LEVELS_CONFIG = [
+  { level: 1, title: 'LEVEL 1: ROOKIE RUSH', subtitle: '5 math values in 30s', questions: 5, xpReward: 10, coinReward: 2, difficulty: 'Easy' },
+  { level: 2, title: 'LEVEL 2: NOVICE STRIKE', subtitle: '6 math values in 30s', questions: 6, xpReward: 20, coinReward: 4, difficulty: 'Normal' },
+  { level: 3, title: 'LEVEL 3: VETERAN CRUNCH', subtitle: '7 math values in 30s', questions: 7, xpReward: 30, coinReward: 6, difficulty: 'Medium' },
+  { level: 4, title: 'LEVEL 4: CIPHER SPRINT', subtitle: '8 math values in 30s', questions: 8, xpReward: 40, coinReward: 8, difficulty: 'Hard' },
+  { level: 5, title: 'LEVEL 5: SPEED RUNNER', subtitle: '9 math values in 30s', questions: 9, xpReward: 50, coinReward: 10, difficulty: 'Expert' },
+  { level: 6, title: 'LEVEL 6: CYBER MASTER', subtitle: '10 math values in 30s', questions: 10, xpReward: 60, coinReward: 12, difficulty: 'Advanced' },
+  { level: 7, title: 'LEVEL 7: MATRIX SURGE', subtitle: '11 math values in 30s', questions: 11, xpReward: 70, coinReward: 14, difficulty: 'Master' },
+  { level: 8, title: 'LEVEL 8: QUANTUM RUSH', subtitle: '12 math values in 30s', questions: 12, xpReward: 80, coinReward: 16, difficulty: 'Pro' },
+  { level: 9, title: 'LEVEL 9: TITAN OVERCLOCK', subtitle: '13 math values in 30s', questions: 13, xpReward: 90, coinReward: 18, difficulty: 'Extreme' },
+  { level: 10, title: 'LEVEL 10: APEX LEGEND', subtitle: '15 math values in 30s', questions: 15, xpReward: 100, coinReward: 20, difficulty: 'Legendary' },
+];
 
 /**
  * 10 XP-to-Coin Exchange Packages
@@ -611,6 +665,21 @@ export const GamingActivityService = {
     }
     const streakInfo = await this.calculateUserStreak(userId);
 
+    // 4. Sequential Level Unlock (Master Prompt Section 5 & 7)
+    let unlockedLevel = 1;
+    if (won) {
+      unlockedLevel = await this.unlockNextLevel(userId, difficultyRewards.difficulty);
+    } else {
+      unlockedLevel = await this.getUserUnlockedLevel(userId);
+    }
+
+    // 5. Update Daily Quest Progress (Master Prompt Section 4 & 7)
+    const questResult = await this.recordQuestActivity(userId, {
+      won,
+      difficulty: difficultyRewards.difficulty,
+      gameId: session.gameId,
+    });
+
     return {
       success: true,
       alreadyCompleted: false,
@@ -623,6 +692,8 @@ export const GamingActivityService = {
       user: updatedUser,
       streakInfo,
       streakState,
+      unlockedLevel,
+      quests: questResult?.quests,
     };
   },
 
@@ -1335,6 +1406,250 @@ export const GamingActivityService = {
   },
 
   /**
+   * Retrieves player's current sequentially unlocked game level (1 to 10).
+   * Level 1 is unlocked for every new player; subsequent levels unlock only upon completing previous level.
+   */
+  async getUserUnlockedLevel(userId) {
+    if (!userId) return 1;
+    const key = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}`;
+    const stored = await SessionStorage.getItem(key);
+    const parsed = parseInt(stored, 10);
+    return isNaN(parsed) || parsed < 1 ? 1 : Math.min(10, parsed);
+  },
+
+  /**
+   * Unlocks next sequential level after a verified win of the current level.
+   * Master Prompt Section 5:
+   * Level 1 completed -> unlocks Level 2
+   * Level 2 completed -> unlocks Level 3
+   * Failed or abandoned games do not unlock.
+   */
+  async unlockNextLevel(userId, completedLevel = 1) {
+    if (!userId) return 1;
+    const current = await this.getUserUnlockedLevel(userId);
+    const completed = parseInt(completedLevel, 10) || 1;
+    let newLevel = current;
+    if (completed >= current && current < 10) {
+      newLevel = current + 1;
+      const key = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}`;
+      await SessionStorage.setItem(key, newLevel);
+    }
+    return newLevel;
+  },
+
+  /**
+   * Retrieves all 10 sequential game levels with player's live unlock/completed status
+   */
+  async getGameLevels(userId) {
+    const unlockedLevel = await this.getUserUnlockedLevel(userId);
+    return GAME_LEVELS_CONFIG.map((cfg) => {
+      const isCompleted = cfg.level < unlockedLevel;
+      const isUnlocked = cfg.level <= unlockedLevel;
+      const isCurrent = cfg.level === unlockedLevel;
+      const isLocked = cfg.level > unlockedLevel;
+      return {
+        ...cfg,
+        isCompleted,
+        isUnlocked,
+        isCurrent,
+        isLocked,
+        status: isCompleted ? 'completed' : isUnlocked ? 'unlocked' : 'locked',
+      };
+    });
+  },
+
+  /**
+   * Computes string remaining time until midnight in user's timezone (e.g. "8h 24m")
+   */
+  getTimeUntilMidnight() {
+    const now = new Date();
+    const midnight = new Date(now);
+    midnight.setHours(24, 0, 0, 0);
+    const diffMs = Math.max(0, midnight.getTime() - now.getTime());
+    const hours = Math.floor(diffMs / (1000 * 60 * 60));
+    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    return `${hours}h ${minutes}m`;
+  },
+
+  /**
+   * Retrieves user's Daily Quests for the current calendar day
+   * Master Prompt Section 4:
+   * - Real quest progress updated from game activity
+   * - Resets at midnight
+   * - Shows completed status and prevents duplicate rewards
+   */
+  async getDailyQuests(userId, timezone = getAppTimezone()) {
+    if (!userId) return { dateKey: '', resetTimeString: '', quests: [] };
+    const now = new Date();
+    const todayKey = toDateKey(now, timezone);
+    const key = `${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${userId}_${todayKey}`;
+    const stored = await SessionStorage.getItem(key);
+
+    const resetTimeString = this.getTimeUntilMidnight();
+
+    if (stored && Array.isArray(stored.quests)) {
+      return {
+        dateKey: todayKey,
+        resetTimeString,
+        playedToday: stored.playedToday || 0,
+        consecutiveWins: stored.consecutiveWins || 0,
+        quests: stored.quests.map((q) => ({
+          ...q,
+          isCompleted: q.current >= q.target,
+          progress: Math.min(1, q.current / q.target),
+        })),
+      };
+    }
+
+    // Initialize fresh quests for today
+    const freshQuests = DEFAULT_DAILY_QUESTS.map((q) => ({
+      ...q,
+      current: 0,
+      claimed: false,
+      isCompleted: false,
+      progress: 0,
+    }));
+
+    const payload = {
+      dateKey: todayKey,
+      playedToday: 0,
+      consecutiveWins: 0,
+      quests: freshQuests,
+      updatedAt: now.toISOString(),
+    };
+    await SessionStorage.setItem(key, payload);
+
+    return {
+      dateKey: todayKey,
+      resetTimeString,
+      playedToday: 0,
+      consecutiveWins: 0,
+      quests: freshQuests,
+    };
+  },
+
+  /**
+   * Updates Daily Quest progress based on actual game activity
+   * - Increments played count
+   * - Increments or resets consecutive wins
+   */
+  async recordQuestActivity(userId, { won = false, difficulty = 1, gameId = '' } = {}) {
+    if (!userId) return null;
+    const timezone = getAppTimezone();
+    const now = new Date();
+    const todayKey = toDateKey(now, timezone);
+    const key = `${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${userId}_${todayKey}`;
+
+    const currentData = await this.getDailyQuests(userId, timezone);
+    const playedToday = (currentData.playedToday || 0) + 1;
+    const consecutiveWins = won ? (currentData.consecutiveWins || 0) + 1 : 0;
+
+    const updatedQuests = (currentData.quests || []).map((q) => {
+      let newCurrent = q.current;
+      if (q.type === 'consecutive_wins') {
+        newCurrent = Math.min(q.target, Math.max(q.current, consecutiveWins));
+      } else if (q.type === 'games_played') {
+        newCurrent = Math.min(q.target, playedToday);
+      }
+      return {
+        ...q,
+        current: newCurrent,
+        isCompleted: newCurrent >= q.target,
+        progress: Math.min(1, newCurrent / q.target),
+      };
+    });
+
+    const payload = {
+      dateKey: todayKey,
+      playedToday,
+      consecutiveWins,
+      quests: updatedQuests,
+      updatedAt: now.toISOString(),
+    };
+    await SessionStorage.setItem(key, payload);
+
+    return {
+      dateKey: todayKey,
+      resetTimeString: this.getTimeUntilMidnight(),
+      playedToday,
+      consecutiveWins,
+      quests: updatedQuests,
+    };
+  },
+
+  /**
+   * Claims reward for a completed daily quest.
+   * Atomically adds XP & Coins, marks as claimed, and records QUEST_REWARD transaction.
+   */
+  async claimQuestReward(userId, questId) {
+    if (!userId || !questId) return { success: false, error: 'Parameters missing.' };
+    const timezone = getAppTimezone();
+    const now = new Date();
+    const todayKey = toDateKey(now, timezone);
+    const key = `${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${userId}_${todayKey}`;
+
+    const currentData = await this.getDailyQuests(userId, timezone);
+    const quests = currentData.quests || [];
+    const questIndex = quests.findIndex((q) => q.id === questId);
+
+    if (questIndex === -1) {
+      return { success: false, error: 'Quest not found.' };
+    }
+
+    const quest = quests[questIndex];
+    if (quest.claimed) {
+      return { success: false, error: 'Reward already collected for this quest today.' };
+    }
+    if (quest.current < quest.target) {
+      return { success: false, error: `Quest not yet completed (${quest.current}/${quest.target}).` };
+    }
+
+    // Mark as claimed
+    quests[questIndex] = {
+      ...quest,
+      claimed: true,
+    };
+
+    const payload = {
+      dateKey: todayKey,
+      playedToday: currentData.playedToday,
+      consecutiveWins: currentData.consecutiveWins,
+      quests,
+      updatedAt: now.toISOString(),
+    };
+    await SessionStorage.setItem(key, payload);
+
+    // Record transaction
+    const transaction = {
+      id: `tx_quest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      userId,
+      transactionType: 'QUEST_REWARD',
+      xpAmount: quest.rewardXp,
+      coinAmount: quest.rewardCoins,
+      questId: quest.id,
+      questTitle: quest.title,
+      transactionDate: now.toISOString(),
+      transactionStatus: 'COMPLETED',
+    };
+    await this.recordTransaction(userId, transaction);
+
+    // Update balances
+    const updatedUser = await AuthService.updateUserBalances(userId, {
+      xpDelta: quest.rewardXp,
+      coinsDelta: quest.rewardCoins,
+    });
+
+    return {
+      success: true,
+      quest: quests[questIndex],
+      quests,
+      xpAwarded: quest.rewardXp,
+      coinsAwarded: quest.rewardCoins,
+      user: updatedUser,
+    };
+  },
+
+  /**
    * Resets development database safely per Master Prompt Section 2:
    * - Backs up data
    * - Clears test sessions, test balances, old reward history
@@ -1388,6 +1703,8 @@ export const GamingActivityService = {
       await SessionStorage.removeItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${u.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.TRANSACTIONS_PREFIX}${u.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.INITIALIZED_FLAG_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${u.id}`);
     }
 
     const active = await AuthService.getActiveSession();
@@ -1404,6 +1721,8 @@ export const GamingActivityService = {
       await SessionStorage.removeItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${active.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.TRANSACTIONS_PREFIX}${active.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.INITIALIZED_FLAG_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${active.id}`);
     }
   },
 
