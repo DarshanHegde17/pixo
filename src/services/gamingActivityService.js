@@ -1,16 +1,36 @@
 import { SessionStorage } from './sessionStorage.js';
+import { AuthService } from './authService.js';
 
 const STORAGE_KEYS = {
   SESSIONS_PREFIX: '@soloplay_gaming_sessions_',
   COMPLETIONS_PREFIX: '@soloplay_gaming_completions_',
   LONGEST_STREAK_PREFIX: '@soloplay_longest_streak_',
+  STREAK_STATE_PREFIX: '@soloplay_user_streak_state_',
+  STREAK_RESTORATIONS_PREFIX: '@soloplay_streak_restorations_',
   INITIALIZED_FLAG_PREFIX: '@soloplay_data_initialized_',
 };
+
+// Concurrency mutex for atomic streak restoration
+let isRestoringStreakLock = false;
 
 /**
  * Standard milestones for streak badges
  */
 export const STREAK_MILESTONES = [3, 7, 14, 30, 60, 100];
+
+/**
+ * Helper to compute calendar day difference between two YYYY-MM-DD keys.
+ * Returns dateKey2 - dateKey1 in calendar days.
+ */
+export function getDaysDifference(dateKey1, dateKey2) {
+  if (!dateKey1 || !dateKey2) return 0;
+  const [y1, m1, d1] = String(dateKey1).split('-').map(Number);
+  const [y2, m2, d2] = String(dateKey2).split('-').map(Number);
+  if (isNaN(y1) || isNaN(m1) || isNaN(d1) || isNaN(y2) || isNaN(m2) || isNaN(d2)) return 0;
+  const utcD1 = Date.UTC(y1, m1 - 1, d1);
+  const utcD2 = Date.UTC(y2, m2 - 1, d2);
+  return Math.round((utcD2 - utcD1) / (1000 * 60 * 60 * 24));
+}
 
 /**
  * Helper to get user timezone safely
@@ -473,7 +493,8 @@ export const GamingActivityService = {
     sessions[sessionIndex] = updatedSession;
     await this.saveUserSessions(userId, sessions);
 
-    // Calculate updated streak
+    // Calculate updated streak & record daily streak activity
+    const streakState = await this.recordActivityCompletion(userId, updatedSession);
     const streakInfo = await this.calculateUserStreak(userId);
 
     return {
@@ -481,6 +502,7 @@ export const GamingActivityService = {
       alreadyCompleted: false,
       session: updatedSession,
       streakInfo,
+      streakState,
       xpAwarded,
     };
   },
@@ -646,16 +668,32 @@ export const GamingActivityService = {
     const yesterdayKey = getOffsetDateKey(-1, now, timezone);
 
     let currentStreak = 0;
+    let previousStreak = 0;
+    let missedDays = 0;
+    let streakStatus = 'none';
     let startWalkingKey = null;
+
+    const latestQualifyingDate = sortedDates.length > 0 ? sortedDates[sortedDates.length - 1] : null;
 
     if (qualifyingDateSet.has(todayKey)) {
       startWalkingKey = todayKey;
+      streakStatus = 'active';
+      missedDays = 0;
     } else if (qualifyingDateSet.has(yesterdayKey)) {
       // Completed yesterday, still active today!
       startWalkingKey = yesterdayKey;
-    } else {
-      // Missing yesterday and today -> Current streak resets to 0
+      streakStatus = 'active';
+      missedDays = 0;
+    } else if (latestQualifyingDate) {
+      // Missing yesterday and today -> Current streak resets to 0 (BROKEN!)
       currentStreak = 0;
+      streakStatus = 'broken';
+      const diff = getDaysDifference(latestQualifyingDate, todayKey);
+      missedDays = Math.max(1, diff - 1);
+    } else {
+      currentStreak = 0;
+      streakStatus = 'none';
+      missedDays = 0;
     }
 
     if (startWalkingKey) {
@@ -664,7 +702,19 @@ export const GamingActivityService = {
         const key = toDateKey(checkDate, timezone);
         if (qualifyingDateSet.has(key)) {
           currentStreak += 1;
-          // Step 1 day backward
+          checkDate.setDate(checkDate.getDate() - 1);
+        } else {
+          break;
+        }
+      }
+      previousStreak = currentStreak;
+    } else if (latestQualifyingDate) {
+      // Walk back from the most recent completed date to calculate what the previous streak was before it broke
+      let checkDate = new Date(`${latestQualifyingDate}T12:00:00Z`);
+      while (true) {
+        const key = toDateKey(checkDate, timezone);
+        if (qualifyingDateSet.has(key)) {
+          previousStreak += 1;
           checkDate.setDate(checkDate.getDate() - 1);
         } else {
           break;
@@ -689,8 +739,13 @@ export const GamingActivityService = {
 
     return {
       currentStreak,
-      longestStreak: Math.max(longestStreak, currentStreak),
+      longestStreak: Math.max(longestStreak, currentStreak, previousStreak),
       lastCompletionDate,
+      lastActivityDate: latestQualifyingDate,
+      streakStatus,
+      missedDays,
+      previousStreak,
+      restorationCost: missedDays * 1000,
       nextMilestone,
       progressPercent,
       qualifyingDates: qualifyingDateSet,
@@ -716,6 +771,354 @@ export const GamingActivityService = {
     }
 
     return streakData;
+  },
+
+  /**
+   * Retrieves complete, verified user streak state with permanent database persistence.
+   * Required fields: currentStreak, longestStreak, lastActivityDate, streakStatus,
+   * missedDays, availableXP, lastRestoredDate, previousStreak, restorationCost.
+   */
+  async getUserStreakState(userId, timezone = getAppTimezone()) {
+    if (!userId) return null;
+
+    const streakStateKey = `${STORAGE_KEYS.STREAK_STATE_PREFIX}${userId}`;
+    const storedState = (await SessionStorage.getItem(streakStateKey)) || null;
+
+    // Get live user XP & Coins from AuthService
+    let userXp = 0;
+    try {
+      const activeUser = (await AuthService.findUserById(userId)) || (await AuthService.getActiveSession());
+      if (activeUser) {
+        userXp = typeof activeUser.xp === 'number' ? activeUser.xp : 0;
+      }
+    } catch (e) {
+      console.warn('Error reading user XP in getUserStreakState:', e);
+    }
+
+    const completions = await this.getUserCompletions(userId);
+    const longestStreakKey = `${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${userId}`;
+    const storedLongest = (await SessionStorage.getItem(longestStreakKey)) || (storedState?.longestStreak ?? 0);
+
+    const calculated = this.calculateStreakFromCompletions(completions, timezone, storedLongest);
+
+    const now = new Date();
+    const todayKey = toDateKey(now, timezone);
+    const yesterdayKey = getOffsetDateKey(-1, now, timezone);
+
+    // Check if storedState has simulated / manually preserved dates
+    let effectiveLastActivity = calculated.lastActivityDate;
+    let currentStreak = calculated.currentStreak;
+    let previousStreak = calculated.previousStreak;
+    let streakStatus = calculated.streakStatus;
+    let missedDays = calculated.missedDays;
+    let lastRestoredDate = storedState?.lastRestoredDate || null;
+
+    const hasCompletedToday = completions.some(
+      (c) => c.dateKey === todayKey && !c.isRestoration
+    );
+
+    if (storedState?.streakStatus === 'broken' && !hasCompletedToday) {
+      effectiveLastActivity = storedState.lastActivityDate;
+      streakStatus = 'broken';
+      missedDays = Math.max(1, storedState.missedDays || 1);
+      currentStreak = 0;
+      previousStreak = storedState.previousStreak || (storedState.longestStreak || 7);
+    } else if (storedState?.streakStatus === 'restored' && !hasCompletedToday) {
+      effectiveLastActivity = storedState.lastActivityDate;
+      streakStatus = 'restored';
+      missedDays = 0;
+      currentStreak = storedState.currentStreak;
+      previousStreak = storedState.previousStreak || currentStreak;
+    } else if (storedState?.lastActivityDate && (!effectiveLastActivity || storedState.lastActivityDate > effectiveLastActivity)) {
+      effectiveLastActivity = storedState.lastActivityDate;
+    }
+
+    // Default initialization if new / demo user without completions
+    if (!effectiveLastActivity && !storedState) {
+      let initialStreak = 0;
+      try {
+        const u = await AuthService.findUserById(userId);
+        if (u?.streak) initialStreak = u.streak;
+      } catch {}
+      if (initialStreak > 0) {
+        effectiveLastActivity = yesterdayKey;
+        currentStreak = initialStreak;
+        previousStreak = initialStreak;
+        streakStatus = 'active';
+        missedDays = 0;
+      }
+    }
+
+    // If effective last activity is older than yesterday, streak is broken
+    if (effectiveLastActivity && streakStatus !== 'broken') {
+      const diff = getDaysDifference(effectiveLastActivity, todayKey);
+      if (diff === 0) {
+        streakStatus = 'active';
+        missedDays = 0;
+      } else if (diff === 1) {
+        streakStatus = 'active';
+        missedDays = 0;
+      } else {
+        streakStatus = 'broken';
+        missedDays = Math.max(1, diff - 1);
+        currentStreak = 0;
+        if (!previousStreak || previousStreak === 0) {
+          previousStreak = storedState?.previousStreak || storedState?.currentStreak || 7;
+        }
+      }
+    }
+
+    // Preserve previous streak count if currently broken
+    if (streakStatus === 'broken' && (!previousStreak || previousStreak === 0)) {
+      previousStreak = storedState?.previousStreak || (storedLongest || 7);
+    }
+
+    const longestStreak = Math.max(storedLongest, currentStreak, previousStreak, calculated.longestStreak);
+    const restorationCost = missedDays * 1000;
+
+    const finalState = {
+      userId,
+      currentStreak,
+      longestStreak,
+      lastActivityDate: effectiveLastActivity,
+      streakStatus,
+      missedDays,
+      availableXP: userXp,
+      lastRestoredDate,
+      previousStreak,
+      restorationCost,
+      updatedAt: now.toISOString(),
+    };
+
+    await SessionStorage.setItem(streakStateKey, finalState);
+    if (longestStreak > storedLongest) {
+      await SessionStorage.setItem(longestStreakKey, longestStreak);
+    }
+
+    return finalState;
+  },
+
+  /**
+   * Records eligible game activity completion and evaluates daily streak rules:
+   * 1. 1 streak per calendar day (12:00 AM - 11:59 PM in local timezone).
+   * 2. If yesterday completed or streak restored, streak increases by 1.
+   * 3. Multiple completions on same day do NOT increase streak multiple times.
+   * 4. If streak was broken, new activity starts a new streak at 1.
+   */
+  async recordActivityCompletion(userId, session, timezone = getAppTimezone()) {
+    if (!userId) return null;
+
+    const streakStateKey = `${STORAGE_KEYS.STREAK_STATE_PREFIX}${userId}`;
+    const now = new Date();
+    const todayKey = toDateKey(now, timezone);
+    const yesterdayKey = getOffsetDateKey(-1, now, timezone);
+
+    // Fetch current streak state prior to recording
+    const current = await this.getUserStreakState(userId, timezone);
+
+    // If user already completed an eligible activity today, do not increase streak multiple times
+    if (current.lastActivityDate === todayKey && current.currentStreak > 0) {
+      return current;
+    }
+
+    let newStreak = 1;
+    if (current.streakStatus === 'broken') {
+      // Missing an entire day broke streak; next completed activity starts a new streak at 1
+      newStreak = 1;
+    } else if (current.lastActivityDate === yesterdayKey || current.streakStatus === 'restored') {
+      // Completed yesterday or restored, streak increases by 1
+      newStreak = (current.currentStreak || 0) + 1;
+    } else if (current.currentStreak === 0) {
+      newStreak = 1;
+    } else {
+      newStreak = (current.currentStreak || 0) + 1;
+    }
+
+    const longestStreak = Math.max(current.longestStreak || 0, newStreak);
+    const updatedState = {
+      ...current,
+      currentStreak: newStreak,
+      longestStreak,
+      lastActivityDate: todayKey,
+      streakStatus: 'active',
+      missedDays: 0,
+      previousStreak: newStreak,
+      restorationCost: 0,
+      updatedAt: now.toISOString(),
+    };
+
+    await SessionStorage.setItem(streakStateKey, updatedState);
+    await SessionStorage.setItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${userId}`, longestStreak);
+    await AuthService.updateUserProfile(userId, { streak: newStreak });
+
+    return updatedState;
+  },
+
+  /**
+   * RESTORE A BROKEN STREAK USING XP
+   *
+   * Business Rules:
+   * - Cost is exactly 1,000 XP per missed day.
+   * - User must have at least 1,000 XP.
+   * - Deducts exactly 1,000 XP per restored day.
+   * - Restores previous streak count.
+   * - Never allows negative XP.
+   * - Atomic concurrency lock prevents duplicate deductions on rapid clicks.
+   * - If insufficient XP: returns "Not enough XP! Earn more XP to restore your streak."
+   */
+  async restoreStreak(userId, countOfDays = null) {
+    if (isRestoringStreakLock) {
+      return { success: false, error: 'Restoration already in progress.' };
+    }
+    isRestoringStreakLock = true;
+
+    try {
+      if (!userId) return { success: false, error: 'User ID is required.' };
+
+      // 1. Get user record
+      let user = (await AuthService.findUserById(userId)) || (await AuthService.getActiveSession());
+      if (!user) {
+        return { success: false, error: 'User not authenticated.' };
+      }
+
+      // 2. Get current streak state
+      const timezone = getAppTimezone();
+      const currentStreakState = await this.getUserStreakState(userId, timezone);
+
+      if (currentStreakState.streakStatus !== 'broken') {
+        return {
+          success: false,
+          error: 'Streak is not broken. Restoration not required.',
+          streakState: currentStreakState,
+        };
+      }
+
+      const totalMissed = Math.max(1, currentStreakState.missedDays || 1);
+      const daysToRestore = countOfDays ? Math.min(totalMissed, countOfDays) : totalMissed;
+      const requiredXp = daysToRestore * 1000;
+      const availableXp = typeof user.xp === 'number' ? user.xp : 0;
+
+      // 3. Insufficient XP check
+      if (availableXp < requiredXp) {
+        return {
+          success: false,
+          insufficientXp: true,
+          error: 'Not enough XP! Earn more XP to restore your streak.',
+          requiredXp,
+          availableXp,
+        };
+      }
+
+      // 4. Atomic XP Deduction
+      const newXp = availableXp - requiredXp;
+      if (newXp < 0) {
+        return { success: false, error: 'Not enough XP! Earn more XP to restore your streak.' };
+      }
+
+      await AuthService.updateUserProfile(userId, { xp: newXp });
+
+      // 5. Ingest verified completion records for each restored missed day
+      const now = new Date();
+      const todayKey = toDateKey(now, timezone);
+      const sessions = await this.getUserSessions(userId);
+
+      for (let i = 1; i <= daysToRestore; i++) {
+        const restoredDateKey = getOffsetDateKey(-i, now, timezone);
+        const restorationSession = {
+          id: `sess_restored_${userId}_${restoredDateKey}_${Date.now()}`,
+          userId,
+          gameId: 'streak_restoration',
+          gameTitle: 'Streak Restoration Vault',
+          gameCategory: 'Streak Recovery',
+          icon: 'flame',
+          gameMode: 'XP Restoration',
+          startedAt: `${restoredDateKey}T12:00:00.000Z`,
+          endedAt: `${restoredDateKey}T12:01:00.000Z`,
+          completedAt: `${restoredDateKey}T12:01:00.000Z`,
+          durationSeconds: 60,
+          status: 'completed',
+          result: 'Streak Restored',
+          score: 0,
+          xpAwarded: 0,
+          isRestoration: true,
+          achievements: ['Streak Restored with 1,000 XP'],
+        };
+        sessions.push(restorationSession);
+      }
+
+      await this.saveUserSessions(userId, sessions);
+
+      // 6. Update streak state with restored streak count
+      const restoredStreak = currentStreakState.previousStreak || 7;
+      const remainingMissed = totalMissed - daysToRestore;
+      const yesterdayKey = getOffsetDateKey(-1, now, timezone);
+
+      const updatedStreakState = {
+        userId,
+        currentStreak: remainingMissed === 0 ? restoredStreak : 0,
+        longestStreak: Math.max(currentStreakState.longestStreak, restoredStreak),
+        lastActivityDate: remainingMissed === 0 ? yesterdayKey : currentStreakState.lastActivityDate,
+        streakStatus: remainingMissed === 0 ? 'restored' : 'broken',
+        missedDays: remainingMissed,
+        availableXP: newXp,
+        lastRestoredDate: todayKey,
+        previousStreak: restoredStreak,
+        restorationCost: remainingMissed * 1000,
+        updatedAt: new Date().toISOString(),
+      };
+
+      const streakStateKey = `${STORAGE_KEYS.STREAK_STATE_PREFIX}${userId}`;
+      await SessionStorage.setItem(streakStateKey, updatedStreakState);
+      await AuthService.updateUserProfile(userId, { streak: updatedStreakState.currentStreak });
+
+      return {
+        success: true,
+        restoredStreak: updatedStreakState.currentStreak,
+        xpDeducted: requiredXp,
+        remainingXp: newXp,
+        streakState: updatedStreakState,
+      };
+    } finally {
+      isRestoringStreakLock = false;
+    }
+  },
+
+  /**
+   * AUTOMATIC MIDNIGHT STREAK VALIDATION
+   * Checks whether the previous calendar day had an eligible completed activity.
+   * If yesterday was missed, immediately marks current streak as broken.
+   */
+  async validateStreakAtMidnight(userId, timezone = getAppTimezone()) {
+    if (!userId) return null;
+    return await this.getUserStreakState(userId, timezone);
+  },
+
+  /**
+   * Test & Simulation Helper: Simulates missed days to test broken streak and restoration
+   */
+  async simulateMissedDays(userId, missedDaysCount = 1) {
+    if (!userId) return null;
+    const timezone = getAppTimezone();
+    const now = new Date();
+    const simulatedDate = getOffsetDateKey(-(missedDaysCount + 1), now, timezone);
+    const streakStateKey = `${STORAGE_KEYS.STREAK_STATE_PREFIX}${userId}`;
+    const current = await this.getUserStreakState(userId, timezone);
+
+    const prev = current.currentStreak > 0 ? current.currentStreak : (current.previousStreak || 7);
+    const simulatedState = {
+      ...current,
+      currentStreak: 0,
+      previousStreak: prev,
+      lastActivityDate: simulatedDate,
+      streakStatus: 'broken',
+      missedDays: missedDaysCount,
+      restorationCost: missedDaysCount * 1000,
+      updatedAt: new Date().toISOString(),
+    };
+
+    await SessionStorage.setItem(streakStateKey, simulatedState);
+    await AuthService.updateUserProfile(userId, { streak: 0 });
+    return simulatedState;
   },
 
   /**

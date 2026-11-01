@@ -32,7 +32,6 @@ export const DEFAULT_GLOBAL_MESSAGES = [
     id: 'global_init_1',
     sender: 'CyberKnight',
     userId: 'usr_demo_2',
-    userLevel: 18,
     avatar: 'shield',
     text: 'Just conquered Chapter 4 in Shadow Blade! Dual plasma katanas are lethal 🔥',
     timestamp: '11:42 AM',
@@ -42,7 +41,6 @@ export const DEFAULT_GLOBAL_MESSAGES = [
     id: 'global_init_2',
     sender: 'NeonViper',
     userId: 'usr_net_3',
-    userLevel: 31,
     avatar: 'flash',
     text: 'Anyone hit 18k points in Neon Runner today? Combo multiplier is insane.',
     timestamp: '12:15 PM',
@@ -52,7 +50,6 @@ export const DEFAULT_GLOBAL_MESSAGES = [
     id: 'global_init_3',
     sender: 'AstroGamer',
     userId: 'usr_net_4',
-    userLevel: 25,
     avatar: 'planet',
     text: 'Sector 7 wormhole unlocked in Astro Odyssey! Cosmic gravity puzzles are top tier.',
     timestamp: '12:28 PM',
@@ -194,7 +191,6 @@ export const ChatService = {
       id: `comm_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       sender: user?.name || 'Slayer',
       userId,
-      userLevel: user?.level || 42,
       avatar: user?.avatar || 'game-controller',
       profilePicture: user?.profilePicture || null,
       text,
@@ -250,13 +246,13 @@ export const ChatService = {
 
     // 4. Daily Streak & Verification Rules
     if (q.includes('streak') || q.includes('flame') || q.includes('daily') || q.includes('calendar')) {
-      return 'Streak Rule: Only verified, completed missions qualify for calendar days. Abandoned or failed runs do not turn dates green. Claim your +150 XP today!';
+      return 'Streak Rule: Complete at least 1 game activity per calendar day (12:00 AM - 11:59 PM) to increase your streak! If you miss a day, restore your streak for 1,000 XP per missed day.';
     }
 
-    // 5. XP, Level & Season Pass
+    // 5. XP & Season Pass
     if (q.includes('xp') || q.includes('level') || q.includes('rank') || q.includes('tier') || q.includes('pass')) {
-      const currentLvl = user?.level || 42;
-      return `Season Pass status: You are currently Level ${currentLvl}. Complete Daily Quests in the command HUD (+150 to +300 XP each) to trigger your next tier level-up!`;
+      const currentXp = user?.xp || 510;
+      return `Season Pass status: You have ${currentXp.toLocaleString()} XP. Complete Daily Quests in the command HUD (+150 to +300 XP each) and win games to boost your XP progression!`;
     }
 
     // 6. Quests & Objectives

@@ -1,31 +1,93 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthService } from '../services/authService';
+import { GamingActivityService, toDateKey, getAppTimezone } from '../services/gamingActivityService';
 
 const AuthContext = createContext(null);
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
+  const [streakState, setStreakState] = useState(null);
   const [isLoadingSession, setIsLoadingSession] = useState(true);
   const [otpNotification, setOtpNotification] = useState(null);
+  const lastCheckedDateRef = useRef(toDateKey(new Date()));
 
-  // Restore session on initial load
+  // Refresh and validate streak state from persistent database
+  const refreshStreak = useCallback(async (userId = user?.id) => {
+    if (!userId) {
+      setStreakState(null);
+      return null;
+    }
+    try {
+      const state = await GamingActivityService.getUserStreakState(userId);
+      setStreakState(state);
+      // Synchronize user.streak in local user state
+      if (state && typeof state.currentStreak === 'number') {
+        setUser((prev) => (prev ? { ...prev, streak: state.currentStreak } : prev));
+      }
+      return state;
+    } catch (err) {
+      console.warn('Error refreshing streak state:', err);
+      return null;
+    }
+  }, [user?.id]);
+
+  // Restore session on initial load & validate streak
   const restoreSession = useCallback(async () => {
     try {
       setIsLoadingSession(true);
       const activeUser = await AuthService.getActiveSession();
       if (activeUser) {
         setUser(activeUser);
+        await refreshStreak(activeUser.id);
       }
     } catch (error) {
       console.error('Failed to restore session:', error);
     } finally {
       setIsLoadingSession(false);
     }
-  }, []);
+  }, [refreshStreak]);
 
   useEffect(() => {
     restoreSession();
   }, [restoreSession]);
+
+  // AUTOMATIC MIDNIGHT STREAK VALIDATION
+  // Monitors calendar day boundaries and triggers validation at 12:00 AM
+  useEffect(() => {
+    if (!user?.id) return;
+
+    let midnightTimer = null;
+    let pollInterval = null;
+
+    const scheduleMidnightTimer = () => {
+      const now = new Date();
+      const midnight = new Date(now);
+      midnight.setHours(24, 0, 0, 0);
+      const msUntilMidnight = Math.max(1000, midnight.getTime() - now.getTime());
+
+      midnightTimer = setTimeout(async () => {
+        lastCheckedDateRef.current = toDateKey(new Date());
+        await refreshStreak(user.id);
+        scheduleMidnightTimer();
+      }, msUntilMidnight);
+    };
+
+    scheduleMidnightTimer();
+
+    // Secondary safety poll: verify if local calendar date changed across 12:00 AM
+    pollInterval = setInterval(async () => {
+      const currentDateKey = toDateKey(new Date());
+      if (currentDateKey !== lastCheckedDateRef.current) {
+        lastCheckedDateRef.current = currentDateKey;
+        await refreshStreak(user.id);
+      }
+    }, 15000);
+
+    return () => {
+      if (midnightTimer) clearTimeout(midnightTimer);
+      if (pollInterval) clearInterval(pollInterval);
+    };
+  }, [user?.id, refreshStreak]);
 
   // Request OTP for new registration
   const requestOtp = async (email) => {
@@ -140,10 +202,43 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // RESTORE BROKEN STREAK USING XP
+  const restoreStreak = async (days = null) => {
+    if (!user) return { success: false, error: 'Not authenticated' };
+    try {
+      const res = await GamingActivityService.restoreStreak(user.id, days);
+      if (res.success && res.streakState) {
+        setStreakState(res.streakState);
+        setUser((prev) =>
+          prev ? { ...prev, xp: res.remainingXp, streak: res.restoredStreak } : prev
+        );
+      }
+      return res;
+    } catch (err) {
+      console.error('Error in restoreStreak:', err);
+      return { success: false, error: err.message || 'Restoration failed' };
+    }
+  };
+
+  // Test Simulation helper: simulate missed calendar days for test verification
+  const simulateMissedDays = async (days = 1) => {
+    if (!user) return null;
+    try {
+      const simulated = await GamingActivityService.simulateMissedDays(user.id, days);
+      setStreakState(simulated);
+      setUser((prev) => (prev ? { ...prev, streak: 0 } : prev));
+      return simulated;
+    } catch (err) {
+      console.error('Error in simulateMissedDays:', err);
+      return null;
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
         user,
+        streakState,
         isAuthenticated: !!user,
         isLoadingSession,
         otpNotification,
@@ -157,6 +252,9 @@ export const AuthProvider = ({ children }) => {
         addXp,
         addCoins,
         claimDailyReward,
+        refreshStreak,
+        restoreStreak,
+        simulateMissedDays,
       }}
     >
       {children}

@@ -303,11 +303,11 @@ assert(neonTip.includes('Neon Runner 2099') && neonTip.includes('combo'), 'Co-Pi
 const bladeTip = ChatService.generateCoPilotResponse('How to beat Shadow Blade boss?', { name: 'SoloSlayer', level: 42 });
 assert(bladeTip.includes('Shadow Blade') && bladeTip.includes('parry'), 'Co-Pilot gives tactical parry tips for Shadow Blade');
 
-const streakTip = ChatService.generateCoPilotResponse('How does my daily streak work?', { name: 'SoloSlayer', level: 42 });
-assert(streakTip.includes('verified') && streakTip.includes('Streak Rule'), 'Co-Pilot reinforces strict verified completion streak rules');
+const streakTip = ChatService.generateCoPilotResponse('How does my daily streak work?', { name: 'SoloSlayer', xp: 3450 });
+assert(streakTip.includes('calendar day') && streakTip.includes('Streak Rule'), 'Co-Pilot reinforces strict verified completion streak rules');
 
-const xpTip = ChatService.generateCoPilotResponse('How do I rank up my XP?', { name: 'SoloSlayer', level: 42 });
-assert(xpTip.includes('Level 42') && xpTip.includes('Season Pass'), 'Co-Pilot includes real authenticated player level in XP guidance');
+const xpTip = ChatService.generateCoPilotResponse('How do I rank up my XP?', { name: 'SoloSlayer', xp: 3450 });
+assert(xpTip.includes('3,450 XP') && xpTip.includes('Season Pass'), 'Co-Pilot includes real authenticated player XP in guidance');
 
 // Rate limiting debounce
 const rateLimitedUser = 'test_usr_rate_limit';

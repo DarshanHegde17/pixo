@@ -20,6 +20,7 @@ import { GameDetailsModal } from '../components/GameDetailsModal';
 import { ProfileScreen } from './ProfileScreen';
 import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunnerModal';
 import { TargetNumberGameModal } from '../components/gameplay/TargetNumberGameModal';
+import { RestoreStreakModal } from '../components/profile/RestoreStreakModal';
 import { LeftChatPanel, RightChatPanel } from '../components/chat';
 import { GamingActivityService } from '../services/gamingActivityService';
 import { AuthService } from '../services/authService';
@@ -232,14 +233,23 @@ const TRENDING_GAMES = [
 ];
 
 export const HomeScreen = ({ onNavigateToLogin }) => {
-  const { user, logout, addXp, claimDailyReward } = useAuth();
+  const {
+    user,
+    streakState,
+    logout,
+    addXp,
+    claimDailyReward,
+    restoreStreak,
+    refreshStreak,
+    simulateMissedDays,
+  } = useAuth();
 
   // Dynamic user stats state with real session persistence
   const [userXp, setUserXp] = useState(user?.xp ?? 3450);
-  const [userLevel, setUserLevel] = useState(user?.level ?? 42);
   const [userMaxXp, setUserMaxXp] = useState(user?.maxXp ?? 5000);
   const [userCoins, setUserCoins] = useState(user?.coins ?? 850);
-  const [userStreak, setUserStreak] = useState(user?.streak ?? 7);
+  const [userStreak, setUserStreak] = useState(streakState?.currentStreak ?? (user?.streak ?? 7));
+  const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
 
   // Daily 20 XP Claim states
   const [daily20XpClaimed, setDaily20XpClaimed] = useState(false);
@@ -255,7 +265,6 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [selectedGameModal, setSelectedGameModal] = useState(null);
   const [activeTab, setActiveTab] = useState('home');
   const [quests, setQuests] = useState(INITIAL_DAILY_QUESTS);
-  const [levelUpPulse, setLevelUpPulse] = useState(false);
   const [liveSessionGame, setLiveSessionGame] = useState(null);
   const [isTargetGameOpen, setIsTargetGameOpen] = useState(false);
   const [hasActiveTargetSession, setHasActiveTargetSession] = useState(false);
@@ -311,16 +320,28 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const playerName = user?.name || 'SoloSlayer';
   const xpPercent = `${Math.min(100, Math.round((userXp / userMaxXp) * 100))}%`;
 
-  // Sync state when user session updates
+  // Sync state when user session or streak updates
   useEffect(() => {
     if (user) {
       if (typeof user.xp === 'number') setUserXp(user.xp);
-      if (typeof user.level === 'number') setUserLevel(user.level);
       if (typeof user.maxXp === 'number') setUserMaxXp(user.maxXp);
       if (typeof user.coins === 'number') setUserCoins(user.coins);
-      if (typeof user.streak === 'number') setUserStreak(user.streak);
+      if (typeof user.streak === 'number' && !streakState) setUserStreak(user.streak);
     }
   }, [user]);
+
+  useEffect(() => {
+    if (streakState && typeof streakState.currentStreak === 'number') {
+      setUserStreak(streakState.currentStreak);
+    }
+  }, [streakState]);
+
+  // Derived streak variables
+  const isStreakBroken = streakState?.streakStatus === 'broken' || (streakState?.missedDays > 0 && userStreak === 0);
+  const missedDays = Math.max(1, streakState?.missedDays || 1);
+  const previousStreak = streakState?.previousStreak || (userStreak > 0 ? userStreak : 7);
+  const restorationCost = streakState?.restorationCost || missedDays * 1000;
+  const canRestoreWithXp = userXp >= restorationCost;
 
   // Check if daily 20 XP was already collected today
   useEffect(() => {
@@ -345,25 +366,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     const updatedXp = userXp + bonusXp;
     const updatedCoins = userCoins + bonusCoins;
 
-    let leveledUp = false;
-    let nextLevel = userLevel;
-    let currentXpCalc = updatedXp;
-    let currentMaxCalc = userMaxXp;
-
-    if (currentXpCalc >= currentMaxCalc) {
-      leveledUp = true;
-      nextLevel += 1;
-      currentXpCalc -= currentMaxCalc;
-      currentMaxCalc = Math.round(currentMaxCalc * 1.25);
-      setUserLevel(nextLevel);
-      setUserXp(currentXpCalc);
-      setUserMaxXp(currentMaxCalc);
-      setLevelUpPulse(true);
-      setTimeout(() => setLevelUpPulse(false), 2500);
-    } else {
-      setUserXp(updatedXp);
-    }
-
+    setUserXp(updatedXp);
     setUserCoins(updatedCoins);
     setDaily20XpClaimed(true);
 
@@ -378,19 +381,12 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       await addXp(bonusXp);
     }
 
-    const finalXpDisplay = leveledUp ? currentXpCalc : updatedXp;
-    setClaimToastMessage(
-      `🎉 +20 XP Claimed! Total XP: ${finalXpDisplay.toLocaleString()} XP ${
-        leveledUp ? `• LEVELED UP TO LVL ${nextLevel}!` : ''
-      }`
-    );
+    setClaimToastMessage(`🎉 +20 XP Claimed! Total XP: ${updatedXp.toLocaleString()} XP`);
     setTimeout(() => setClaimToastMessage(null), 4000);
 
     Alert.alert(
       '🎁 +20 XP Daily Bonus Claimed!',
-      `Success! +20 XP and +10 Coins have been added to your account.\n\nTotal XP: ${finalXpDisplay.toLocaleString()} XP\nCoins: ${updatedCoins.toLocaleString()}\nDaily Streak: ${userStreak} Days Active!${
-        leveledUp ? `\n\n🏆 CONGRATULATIONS! You advanced to Level ${nextLevel}!` : ''
-      }`
+      `Success! +20 XP and +10 Coins have been added to your account.\n\nTotal XP: ${updatedXp.toLocaleString()} XP\nCoins: ${updatedCoins.toLocaleString()}\nDaily Streak: ${userStreak} Days Active!`
     );
   };
 
@@ -413,17 +409,10 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       setStreakClaimed(true);
       const updatedXp = userXp + 150;
       setUserXp(updatedXp);
-
-      // Level up calculation check
-      if (updatedXp >= userMaxXp) {
-        setUserLevel((prev) => prev + 1);
-        setUserXp(updatedXp - userMaxXp);
-        setLevelUpPulse(true);
-        setTimeout(() => setLevelUpPulse(false), 2500);
-      }
+      if (addXp) addXp(150);
 
       Alert.alert(
-        '🔥 7-Day Solo Streak Claimed!',
+        '🔥 Daily Solo Streak Claimed!',
         '+150 XP added to your Season Pass progression! Keep your streak active tomorrow.'
       );
     }
@@ -438,13 +427,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     const bonus = rewardXp || 150;
     const updatedXp = userXp + bonus;
     setUserXp(updatedXp);
-
-    if (updatedXp >= userMaxXp) {
-      setUserLevel((prev) => prev + 1);
-      setUserXp(updatedXp - userMaxXp);
-      setLevelUpPulse(true);
-      setTimeout(() => setLevelUpPulse(false), 2500);
-    }
+    if (addXp) addXp(bonus);
 
     // Record verified quest completion in GamingActivityService
     if (user?.id) {
@@ -602,32 +585,65 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 </View>
               </TouchableOpacity>
 
-              {/* Stats Bar: Exact sequence requested:
-                  1. Streak -> 2. XP -> 3. Coin -> 4. Level */}
+              {/* Stats Bar: Sequence: 1. Streak -> 2. XP -> 3. Coin (Level removed) */}
               <View style={styles.topStatsBar}>
                 {/* 1. STREAK */}
                 <TouchableOpacity
-                  style={styles.statChipStreak}
-                  onPress={() =>
-                    Alert.alert(
-                      '🔥 Daily Streak Active',
-                      `Current Streak: ${userStreak} Days\nKeep your streak active tomorrow to maintain your player momentum and reward multipliers!`
-                    )
-                  }
+                  style={[
+                    styles.statChipStreak,
+                    isStreakBroken && styles.statChipStreakBroken,
+                  ]}
+                  onPress={() => {
+                    if (isStreakBroken) {
+                      setIsRestoreModalOpen(true);
+                    } else {
+                      Alert.alert(
+                        '🔥 Daily Streak Active',
+                        `Current Streak: ${userStreak} Days\nKeep your streak active tomorrow by completing at least 1 game activity (12:00 AM – 11:59 PM)!`
+                      );
+                    }
+                  }}
                   activeOpacity={0.8}
                 >
                   <LinearGradient
-                    colors={['rgba(255, 106, 0, 0.22)', 'rgba(255, 60, 0, 0.08)']}
+                    colors={
+                      isStreakBroken
+                        ? ['rgba(255, 69, 58, 0.35)', 'rgba(255, 69, 58, 0.15)']
+                        : ['rgba(255, 106, 0, 0.22)', 'rgba(255, 60, 0, 0.08)']
+                    }
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
                     style={styles.statChipGradient}
                   >
-                    <View style={styles.statIconBadgeStreak}>
-                      <Ionicons name="flame" size={15} color="#FF6A00" />
+                    <View
+                      style={[
+                        styles.statIconBadgeStreak,
+                        isStreakBroken && styles.statIconBadgeStreakBroken,
+                      ]}
+                    >
+                      <Ionicons
+                        name={isStreakBroken ? 'alert-circle' : 'flame'}
+                        size={15}
+                        color={isStreakBroken ? '#FF453A' : '#FF6A00'}
+                      />
                     </View>
                     <View style={styles.statContentWrap}>
-                      <Text style={styles.statLabelStreak}>STREAK</Text>
-                      <Text style={styles.statValueStreak}>{userStreak} Days</Text>
+                      <Text
+                        style={[
+                          styles.statLabelStreak,
+                          isStreakBroken && styles.statLabelStreakBroken,
+                        ]}
+                      >
+                        {isStreakBroken ? 'STREAK BROKEN' : 'STREAK'}
+                      </Text>
+                      <Text
+                        style={[
+                          styles.statValueStreak,
+                          isStreakBroken && styles.statValueStreakBroken,
+                        ]}
+                      >
+                        {isStreakBroken ? 'RESTORE ⚡' : `${userStreak} Days`}
+                      </Text>
                     </View>
                   </LinearGradient>
                 </TouchableOpacity>
@@ -685,28 +701,6 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                     </View>
                   </LinearGradient>
                 </TouchableOpacity>
-
-                {/* 4. LEVEL */}
-                <TouchableOpacity
-                  style={[styles.statChipLevel, levelUpPulse && styles.statChipLevelPulse]}
-                  onPress={() => setActiveTab('profile')}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={['rgba(57, 255, 20, 0.22)', 'rgba(0, 200, 83, 0.08)']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 1 }}
-                    style={styles.statChipGradient}
-                  >
-                    <View style={styles.statIconBadgeLevel}>
-                      <Ionicons name="trophy" size={14} color="#39FF14" />
-                    </View>
-                    <View style={styles.statContentWrap}>
-                      <Text style={styles.statLabelLevel}>LEVEL</Text>
-                      <Text style={styles.statValueLevel}>{userLevel < 10 ? `0${userLevel}` : userLevel}</Text>
-                    </View>
-                  </LinearGradient>
-                </TouchableOpacity>
               </View>
             </View>
 
@@ -717,7 +711,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 onPress={() =>
                   Alert.alert(
                     'Player Hub // Status',
-                    `Player: ${playerName}\nStreak: ${userStreak} Days\nXP: ${userXp.toLocaleString()} / ${userMaxXp.toLocaleString()}\nCoins: ${userCoins.toLocaleString()}\nLevel: ${userLevel}\nDaily 20 XP: ${
+                    `Player: ${playerName}\nStreak: ${isStreakBroken ? 'Broken' : `${userStreak} Days`}\nXP: ${userXp.toLocaleString()} / ${userMaxXp.toLocaleString()}\nCoins: ${userCoins.toLocaleString()}\nDaily 20 XP: ${
                       daily20XpClaimed ? 'Claimed ✓' : 'Available Now (+20 XP)'
                     }`
                   )
@@ -837,6 +831,153 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           </View>
 
           {/* ========================================================= */}
+          {/* DAILY STREAK CARD & RESTORATION SYSTEM                    */}
+          {/* ========================================================= */}
+          <View style={[styles.mainStreakCard, isStreakBroken && styles.mainStreakCardBroken]}>
+            <LinearGradient
+              colors={
+                isStreakBroken
+                  ? ['rgba(255, 69, 58, 0.22)', 'rgba(255, 106, 0, 0.08)', '#0F0808']
+                  : ['rgba(255, 106, 0, 0.20)', 'rgba(57, 255, 20, 0.06)', '#08120A']
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.mainStreakGradient}
+            >
+              <View style={styles.mainStreakTopRow}>
+                <View style={styles.mainStreakLeftCol}>
+                  <View style={[styles.mainStreakFireBadge, isStreakBroken && styles.mainStreakFireBadgeBroken]}>
+                    <Ionicons
+                      name="flame"
+                      size={26}
+                      color={isStreakBroken ? '#FF453A' : '#FF6A00'}
+                    />
+                  </View>
+                  <View style={styles.mainStreakTitleWrap}>
+                    <Text style={[styles.mainStreakHeading, isStreakBroken && styles.mainStreakHeadingBroken]}>
+                      {isStreakBroken ? 'STREAK BROKEN' : `${userStreak} DAYS STREAK`}
+                    </Text>
+                    <Text style={styles.mainStreakDesc}>
+                      {isStreakBroken
+                        ? `Missed ${missedDays} calendar day(s). Previous streak: ${previousStreak} Days.`
+                        : `Complete 1 game activity daily (12:00 AM – 11:59 PM) to maintain consecutive days.`}
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Available XP Balance */}
+                <View style={styles.mainStreakXpWrap}>
+                  <Text style={styles.mainStreakXpLabel}>AVAILABLE BALANCE</Text>
+                  <View style={styles.mainStreakXpValueRow}>
+                    <Ionicons name="flash" size={14} color="#00E5FF" style={{ marginRight: 4 }} />
+                    <Text style={styles.mainStreakXpValueText}>{userXp.toLocaleString()} XP</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Status / Restore Action Row */}
+              <View style={styles.mainStreakBottomRow}>
+                {isStreakBroken ? (
+                  <View style={styles.mainStreakRestoreWrap}>
+                    <TouchableOpacity
+                      style={[
+                        styles.restoreStreakButton,
+                        !canRestoreWithXp && styles.restoreStreakButtonDisabled,
+                      ]}
+                      onPress={() => setIsRestoreModalOpen(true)}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient
+                        colors={
+                          canRestoreWithXp
+                            ? ['#FF6A00', '#FF3B30']
+                            : ['#2E1C1A', '#1C100E']
+                        }
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.restoreStreakBtnGradient}
+                      >
+                        <Ionicons
+                          name="refresh-circle"
+                          size={18}
+                          color={canRestoreWithXp ? '#FFFFFF' : '#888888'}
+                          style={{ marginRight: 8 }}
+                        />
+                        <Text
+                          style={[
+                            styles.restoreStreakButtonText,
+                            !canRestoreWithXp && styles.restoreStreakButtonTextDisabled,
+                          ]}
+                        >
+                          RESTORE STREAK – {restorationCost.toLocaleString()} XP
+                        </Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+
+                    {!canRestoreWithXp && (
+                      <Text style={styles.insufficientXpNotice}>
+                        Not enough XP! Earn more XP to restore your streak.
+                      </Text>
+                    )}
+                  </View>
+                ) : (
+                  <View style={styles.activeStreakInfoRow}>
+                    <View style={styles.activeStreakBadge}>
+                      <Ionicons
+                        name={streakState?.completedToday ? 'checkmark-circle' : 'time-outline'}
+                        size={15}
+                        color={streakState?.completedToday ? '#39FF14' : '#FFA154'}
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text
+                        style={[
+                          styles.activeStreakBadgeText,
+                          streakState?.completedToday && styles.activeStreakBadgeTextComplete,
+                        ]}
+                      >
+                        {streakState?.completedToday
+                          ? 'Activity completed today ✓'
+                          : 'Play 1 activity today to keep streak active'}
+                      </Text>
+                    </View>
+                    <Text style={styles.longestStreakLabel}>
+                      Longest: {streakState?.longestStreak || userStreak} Days
+                    </Text>
+                  </View>
+                )}
+
+                {/* Developer Testing Controls */}
+                <View style={styles.streakDevControls}>
+                  {isStreakBroken ? (
+                    <TouchableOpacity
+                      style={styles.streakDevBtn}
+                      onPress={async () => {
+                        if (addXp) await addXp(1000);
+                        Alert.alert('+1,000 XP Added', 'Added 1,000 XP for testing streak restoration.');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.streakDevBtnText}>+1,000 XP (Test)</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={styles.streakDevBtn}
+                      onPress={async () => {
+                        if (simulateMissedDays) {
+                          await simulateMissedDays(1);
+                        }
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.streakDevBtnText}>Break Streak (Test)</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            </LinearGradient>
+          </View>
+
+          {/* ========================================================= */}
           {/* 5. XP PROGRESS — GAMING HUD                              */}
           {/* ========================================================= */}
           <View style={styles.xpCard}>
@@ -867,7 +1008,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
 
             <View style={styles.xpFooterRow}>
               <Text style={styles.xpPercentageText}>{xpPercent} Completed</Text>
-              <Text style={styles.xpNextTierText}>Next Tier: Level {userLevel + 1}</Text>
+              <Text style={styles.xpNextTierText}>{Math.max(0, userMaxXp - userXp).toLocaleString()} XP to Next Milestone</Text>
             </View>
           </View>
 
@@ -938,7 +1079,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                     <Text style={styles.dailyClaimMetaTagText}>🔥 {userStreak}-DAY STREAK ACTIVE</Text>
                   </View>
                   <View style={[styles.dailyClaimMetaTag, styles.dailyClaimMetaTagTier]}>
-                    <Text style={styles.dailyClaimMetaTagTierText}>⚡ LEVEL {userLevel}</Text>
+                    <Text style={styles.dailyClaimMetaTagTierText}>⚡ {userXp.toLocaleString()} XP EARNED</Text>
                   </View>
                 </View>
               </View>
@@ -1554,9 +1695,9 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           visible={!!liveSessionGame}
           game={liveSessionGame}
           onClose={() => setLiveSessionGame(null)}
-          onSessionUpdated={() => {
+          onSessionUpdated={async () => {
+            if (refreshStreak) await refreshStreak();
             if (user?.xp) setUserXp(user.xp);
-            if (user?.level) setUserLevel(user.level);
           }}
         />
       )}
@@ -1565,9 +1706,30 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       <TargetNumberGameModal
         visible={isTargetGameOpen}
         onClose={() => setIsTargetGameOpen(false)}
-        onSessionComplete={() => {
+        onSessionComplete={async () => {
+          if (refreshStreak) await refreshStreak();
           if (user?.xp) setUserXp(user.xp);
-          if (user?.level) setUserLevel(user.level);
+        }}
+      />
+
+      {/* PIXO Restore Streak Confirmation Modal */}
+      <RestoreStreakModal
+        visible={isRestoreModalOpen}
+        onClose={() => setIsRestoreModalOpen(false)}
+        streakState={streakState}
+        availableXp={userXp}
+        onConfirmRestore={async () => {
+          if (restoreStreak) {
+            const res = await restoreStreak();
+            if (res && res.success) {
+              Alert.alert(
+                '🔥 Streak Restored!',
+                `Your ${res.restoredStreak}-day streak has been restored!\n\n1,000 XP deducted.\nRemaining XP: ${res.remainingXp.toLocaleString()} XP.`
+              );
+            }
+            return res;
+          }
+          return { success: false, error: 'Restore service unavailable' };
         }}
       />
     </GlowingBackground>
@@ -1784,6 +1946,15 @@ const styles = StyleSheet.create({
         }
       : {}),
   },
+  statChipStreakBroken: {
+    borderColor: 'rgba(255, 69, 58, 0.7)',
+    backgroundColor: 'rgba(35, 12, 12, 0.85)',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 0 10px rgba(255, 69, 58, 0.35)',
+        }
+      : {}),
+  },
   statChipXp: {
     borderRadius: 10,
     borderWidth: 1,
@@ -1812,24 +1983,6 @@ const styles = StyleSheet.create({
         }
       : {}),
   },
-  statChipLevel: {
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.45)',
-    overflow: 'hidden',
-    backgroundColor: 'rgba(16, 22, 16, 0.8)',
-    ...(Platform.OS === 'web'
-      ? {
-          cursor: 'pointer',
-          boxShadow: '0 0 8px rgba(57, 255, 20, 0.2)',
-          transition: 'transform 0.15s ease',
-        }
-      : {}),
-  },
-  statChipLevelPulse: {
-    borderColor: colors.primary,
-    backgroundColor: 'rgba(57, 255, 20, 0.25)',
-  },
   statChipGradient: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1844,6 +1997,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginRight: 6,
+  },
+  statIconBadgeStreakBroken: {
+    backgroundColor: 'rgba(255, 69, 58, 0.25)',
   },
   statIconBadgeXp: {
     width: 22,
@@ -1863,15 +2019,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginRight: 6,
   },
-  statIconBadgeLevel: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: 'rgba(57, 255, 20, 0.18)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 6,
-  },
   statContentWrap: {
     flexDirection: 'column',
   },
@@ -1881,10 +2028,16 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     letterSpacing: 0.5,
   },
+  statLabelStreakBroken: {
+    color: '#FF6961',
+  },
   statValueStreak: {
     color: '#FFFFFF',
     fontSize: 11.5,
     fontWeight: '900',
+  },
+  statValueStreakBroken: {
+    color: '#FFD1D1',
   },
   statLabelXp: {
     color: '#5CE1E6',
@@ -1908,16 +2061,203 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '900',
   },
-  statLabelLevel: {
-    color: '#70FF50',
-    fontSize: 8.5,
-    fontWeight: '800',
+  // Main Streak Card & Restoration HUD
+  mainStreakCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 8,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 106, 0, 0.35)',
+    overflow: 'hidden',
+    backgroundColor: '#0A0F0B',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(255, 106, 0, 0.1)',
+        }
+      : {}),
+  },
+  mainStreakCardBroken: {
+    borderColor: 'rgba(255, 69, 58, 0.5)',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(255, 69, 58, 0.25)',
+        }
+      : {}),
+  },
+  mainStreakGradient: {
+    padding: 16,
+  },
+  mainStreakTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  mainStreakLeftCol: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 220,
+  },
+  mainStreakFireBadge: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    backgroundColor: 'rgba(255, 106, 0, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 106, 0, 0.4)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  mainStreakFireBadgeBroken: {
+    backgroundColor: 'rgba(255, 69, 58, 0.22)',
+    borderColor: 'rgba(255, 69, 58, 0.5)',
+  },
+  mainStreakTitleWrap: {
+    flex: 1,
+  },
+  mainStreakHeading: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#FF9500',
     letterSpacing: 0.5,
   },
-  statValueLevel: {
-    color: '#FFFFFF',
-    fontSize: 11.5,
+  mainStreakHeadingBroken: {
+    color: '#FF453A',
+  },
+  mainStreakDesc: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  mainStreakXpWrap: {
+    alignItems: 'flex-end',
+    backgroundColor: 'rgba(0, 229, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 229, 255, 0.25)',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  mainStreakXpLabel: {
+    fontSize: 8.5,
+    fontWeight: '800',
+    color: '#5CE1E6',
+    letterSpacing: 0.5,
+  },
+  mainStreakXpValueRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  mainStreakXpValueText: {
+    fontSize: 13,
     fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  mainStreakBottomRow: {
+    marginTop: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.07)',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  mainStreakRestoreWrap: {
+    flex: 1,
+    minWidth: 260,
+  },
+  restoreStreakButton: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    alignSelf: 'flex-start',
+    ...(Platform.OS === 'web'
+      ? {
+          cursor: 'pointer',
+        }
+      : {}),
+  },
+  restoreStreakButtonDisabled: {
+    opacity: 0.65,
+    ...(Platform.OS === 'web'
+      ? {
+          cursor: 'not-allowed',
+        }
+      : {}),
+  },
+  restoreStreakBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 9,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+  },
+  restoreStreakButtonText: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.5,
+  },
+  restoreStreakButtonTextDisabled: {
+    color: '#AAAAAA',
+  },
+  insufficientXpNotice: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#FF6961',
+    marginTop: 6,
+  },
+  activeStreakInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  activeStreakBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+  },
+  activeStreakBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+  },
+  activeStreakBadgeTextComplete: {
+    color: '#39FF14',
+  },
+  longestStreakLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textTertiary,
+  },
+  streakDevControls: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  streakDevBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 5,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.12)',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  streakDevBtnText: {
+    fontSize: 10,
+    color: colors.textSecondary,
+    fontWeight: '600',
   },
   headerActions: {
     flexDirection: 'row',

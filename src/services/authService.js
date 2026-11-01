@@ -1,4 +1,4 @@
-import { SessionStorage } from './sessionStorage';
+import { SessionStorage } from './sessionStorage.js';
 
 const STORAGE_KEYS = {
   CURRENT_SESSION: '@soloplay_active_session',
@@ -13,7 +13,6 @@ export const DEFAULT_DEMO_USERS = [
     name: 'SoloSlayer',
     email: 'gamer@gmail.com',
     password: 'SoloGamer2026!',
-    level: 42,
     xp: 3450,
     maxXp: 5000,
     coins: 850,
@@ -29,7 +28,6 @@ export const DEFAULT_DEMO_USERS = [
     name: 'CyberKnight',
     email: 'player1@pixo.gg',
     password: 'SoloGamer2026!',
-    level: 18,
     xp: 1200,
     maxXp: 2500,
     coins: 450,
@@ -45,7 +43,6 @@ export const DEFAULT_DEMO_USERS = [
     name: 'CyberKnight',
     email: 'player1@soloplay.gg',
     password: 'SoloGamer2026!',
-    level: 18,
     xp: 1200,
     maxXp: 2500,
     coins: 450,
@@ -97,6 +94,17 @@ export const AuthService = {
     const users = await this.getAllUsers();
     const normalized = email.trim().toLowerCase();
     return users.find((u) => u.email.toLowerCase() === normalized) || null;
+  },
+
+  /**
+   * Find user by ID
+   * @param {string} userId
+   * @returns {Promise<object | null>}
+   */
+  async findUserById(userId) {
+    if (!userId) return null;
+    const users = await this.getAllUsers();
+    return users.find((u) => u.id === userId) || null;
   },
 
   /**
@@ -197,9 +205,10 @@ export const AuthService = {
       email: normalizedEmail,
       gamerTag: safeTag,
       password: password,
-      level: 1,
       xp: 150,
-      maxXp: 1000,
+      maxXp: 5000,
+      coins: 200,
+      streak: 1,
       avatar: 'flash',
       badge: 'Novice Adventurer',
       profilePicture: null,
@@ -327,32 +336,23 @@ export const AuthService = {
   },
 
   /**
-   * Adds XP to user progression and calculates level up
+   * Adds XP to user balance (accumulates directly, no level calculation)
    */
   async addXpToUser(userId, xpToAdd) {
     if (!userId || !xpToAdd) return null;
     const active = await this.getActiveSession();
     if (!active || active.id !== userId) return null;
 
-    let { level = 1, xp = 0, maxXp = 1000 } = active;
-    let newXp = xp + xpToAdd;
-    let newLevel = level;
-    let leveledUp = false;
-
-    while (newXp >= maxXp) {
-      newXp -= maxXp;
-      newLevel += 1;
-      maxXp = Math.round(maxXp * 1.25);
-      leveledUp = true;
-    }
+    const currentXp = typeof active.xp === 'number' ? active.xp : 0;
+    const newXp = currentXp + xpToAdd;
+    const maxXp = active.maxXp || 5000;
 
     const updatedUser = await this.updateUserProfile(userId, {
       xp: newXp,
-      level: newLevel,
       maxXp,
     });
 
-    return { updatedUser, leveledUp };
+    return { updatedUser };
   },
 
   /**
@@ -429,7 +429,6 @@ export const AuthService = {
       updatedUser,
       xpAdded: xpAmount,
       coinsAdded: coinsAmount,
-      leveledUp: xpResult?.leveledUp || false,
     };
   },
 

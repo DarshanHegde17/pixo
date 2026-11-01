@@ -253,8 +253,6 @@ export const PlayerProfileHeader = ({ onProfileUpdated }) => {
   const playerName = user?.name || 'SoloSlayer';
   const playerEmail = user?.email || 'gamer@gmail.com';
   const gamerTag = user?.gamerTag || 'SOLO_SLAYER#2099';
-  const playerLevel = user?.level || 1;
-  const formattedLevel = playerLevel < 10 ? `0${playerLevel}` : `${playerLevel}`;
 
   const ringInterpolation = ringRotateAnim.interpolate({
     inputRange: [0, 1],
@@ -341,10 +339,6 @@ export const PlayerProfileHeader = ({ onProfileUpdated }) => {
         <View style={styles.tagLevelRow}>
           <Text style={styles.gamerTagText}>{gamerTag}</Text>
           <Text style={styles.tagDividerDot}>·</Text>
-          <View style={styles.levelBadgeWrap}>
-            <Text style={styles.levelBadgeLabel}>LEVEL</Text>
-            <Text style={styles.levelBadgeValue}>{formattedLevel}</Text>
-          </View>
           <View style={styles.proBadgeWrap}>
             <Text style={styles.proBadgeText}>{user?.badge || 'PRO SLAYER'}</Text>
           </View>

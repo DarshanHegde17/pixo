@@ -252,9 +252,6 @@ export const RightChatPanel = ({
                   <Text style={[styles.senderName, isMe && styles.senderNameMe]} numberOfLines={1}>
                     {isMe ? 'YOU' : msg.sender}
                   </Text>
-                  <View style={styles.levelTag}>
-                    <Text style={styles.levelTagText}>LV{msg.userLevel || 1}</Text>
-                  </View>
                   <Text style={styles.timestampText}>{msg.timestamp}</Text>
                 </View>
 
