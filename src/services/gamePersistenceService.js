@@ -10,6 +10,14 @@ import { SessionStorage } from './sessionStorage.js';
 export const GAME_PERSISTENCE_KEYS = {
   ACTIVE_TARGET_GAME_PREFIX: '@pixo_target_game_active_',
   ARCHIVED_GAMES_PREFIX: '@pixo_target_game_archive_',
+  UNLOCKED_LEVELS_PREFIX: '@pixo_target_game_unlocked_levels_',
+};
+
+export const DEFAULT_TARGET_UNLOCKED_LEVELS = {
+  '+': 1,
+  '-': 1,
+  '*': 1,
+  '%': 1,
 };
 
 export const GamePersistenceService = {
@@ -170,6 +178,71 @@ export const GamePersistenceService = {
     } catch (err) {
       console.warn('GamePersistenceService.archiveSession error:', err);
       await this.clearActiveSession(userId);
+    }
+  },
+
+  /**
+   * Generates storage key for unlocked levels scoped to user
+   * @param {string} userId
+   * @returns {string}
+   */
+  getUnlockedLevelsKey(userId = 'guest') {
+    const cleanId = String(userId || 'guest').replace(/[^a-zA-Z0-9_-]/g, '_');
+    return `${GAME_PERSISTENCE_KEYS.UNLOCKED_LEVELS_PREFIX}${cleanId}`;
+  },
+
+  /**
+   * Retrieves unlocked level progress for each operator for this user.
+   * Default is level 1 unlocked; levels 2-10 are locked until preceding level is cleared.
+   * @param {string} userId
+   * @returns {Promise<object>} e.g. { '+': 1, '-': 1, '*': 1, '%': 1 }
+   */
+  async getUnlockedLevels(userId = 'guest') {
+    try {
+      const key = this.getUnlockedLevelsKey(userId);
+      const data = await SessionStorage.getItem(key);
+      if (!data || typeof data !== 'object') {
+        return { ...DEFAULT_TARGET_UNLOCKED_LEVELS };
+      }
+      return {
+        '+': Math.max(1, Math.min(11, parseInt(data['+'], 10) || 1)),
+        '-': Math.max(1, Math.min(11, parseInt(data['-'], 10) || 1)),
+        '*': Math.max(1, Math.min(11, parseInt(data['*'], 10) || 1)),
+        '%': Math.max(1, Math.min(11, parseInt(data['%'], 10) || 1)),
+      };
+    } catch (err) {
+      console.warn('GamePersistenceService.getUnlockedLevels error:', err);
+      return { ...DEFAULT_TARGET_UNLOCKED_LEVELS };
+    }
+  },
+
+  /**
+   * Unlocks the subsequent level (up to 10) for the specified operator upon completion.
+   * Level 1 completed unlocks Level 2, Level 2 unlocks Level 3, etc.
+   * @param {string} userId
+   * @param {string} operator ('+', '-', '*', '%')
+   * @param {number} completedLevel (1 to 10)
+   * @returns {Promise<object>} updated unlocked levels map
+   */
+  async unlockNextLevel(userId = 'guest', operator = '+', completedLevel = 1) {
+    try {
+      const current = await this.getUnlockedLevels(userId);
+      const op = ['+', '-', '*', '%'].includes(operator) ? operator : '+';
+      const nextLevel = Math.min(11, Math.max(1, completedLevel + 1));
+      const currentUnlocked = current[op] || 1;
+      const updatedUnlocked = Math.max(currentUnlocked, nextLevel);
+
+      const updated = {
+        ...current,
+        [op]: updatedUnlocked,
+      };
+
+      const key = this.getUnlockedLevelsKey(userId);
+      await SessionStorage.setItem(key, updated);
+      return updated;
+    } catch (err) {
+      console.warn('GamePersistenceService.unlockNextLevel error:', err);
+      return { ...DEFAULT_TARGET_UNLOCKED_LEVELS };
     }
   },
 };

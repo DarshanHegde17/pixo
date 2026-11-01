@@ -28,18 +28,23 @@ const OPERATORS = [
   { id: '%', label: 'MODULUS (%)', symbol: '%', color: '#FF6A00', desc: 'Remainder Solver' },
 ];
 
-// Level configurations:
-// Level 1: 5 values in 30s
-// Level 2: 7 values in 30s
-// Level 3: 10 values in 30s
+// Level configurations: 10 Levels for each operator in Target Number
+// Level 1 must be completed to unlock Level 2, Level 2 to unlock Level 3, etc.
 const LEVEL_CONFIGS = {
   1: { level: 1, totalQuestions: 5, timeLimit: 30, title: 'LEVEL 1: ROOKIE RUSH', xpReward: 100, coinReward: 50 },
-  2: { level: 2, totalQuestions: 7, timeLimit: 30, title: 'LEVEL 2: VETERAN CRUNCH', xpReward: 200, coinReward: 100 },
-  3: { level: 3, totalQuestions: 10, timeLimit: 30, title: 'LEVEL 3: CYBER MASTER', xpReward: 350, coinReward: 200 },
+  2: { level: 2, totalQuestions: 6, timeLimit: 30, title: 'LEVEL 2: NOVICE STRIKE', xpReward: 150, coinReward: 75 },
+  3: { level: 3, totalQuestions: 7, timeLimit: 30, title: 'LEVEL 3: VETERAN CRUNCH', xpReward: 200, coinReward: 100 },
+  4: { level: 4, totalQuestions: 8, timeLimit: 30, title: 'LEVEL 4: CIPHER SPRINT', xpReward: 250, coinReward: 125 },
+  5: { level: 5, totalQuestions: 9, timeLimit: 30, title: 'LEVEL 5: SPEED RUNNER', xpReward: 300, coinReward: 150 },
+  6: { level: 6, totalQuestions: 10, timeLimit: 30, title: 'LEVEL 6: CYBER MASTER', xpReward: 350, coinReward: 200 },
+  7: { level: 7, totalQuestions: 11, timeLimit: 30, title: 'LEVEL 7: MATRIX SURGE', xpReward: 420, coinReward: 250 },
+  8: { level: 8, totalQuestions: 12, timeLimit: 30, title: 'LEVEL 8: QUANTUM RUSH', xpReward: 500, coinReward: 300 },
+  9: { level: 9, totalQuestions: 13, timeLimit: 30, title: 'LEVEL 9: TITAN OVERCLOCK', xpReward: 600, coinReward: 350 },
+  10: { level: 10, totalQuestions: 15, timeLimit: 30, title: 'LEVEL 10: APEX LEGEND', xpReward: 800, coinReward: 500 },
 };
 
 /**
- * Generate a single math problem based on operator and level
+ * Generate a single math problem based on operator and level (1 - 10)
  */
 function generateProblem(op, level) {
   let num1 = 1;
@@ -49,13 +54,35 @@ function generateProblem(op, level) {
   if (op === '+') {
     if (level === 1) {
       num1 = Math.floor(Math.random() * 9) + 2; // 2 to 10
-      num2 = Math.floor(Math.random() * 9) + 2; // 2 to 10
+      num2 = Math.floor(Math.random() * 9) + 2;
     } else if (level === 2) {
-      num1 = Math.floor(Math.random() * 18) + 7; // 7 to 25
+      num1 = Math.floor(Math.random() * 12) + 4; // 4 to 15
+      num2 = Math.floor(Math.random() * 12) + 4;
+    } else if (level === 3) {
+      num1 = Math.floor(Math.random() * 18) + 7; // 7 to 24
       num2 = Math.floor(Math.random() * 18) + 7;
-    } else {
-      num1 = Math.floor(Math.random() * 35) + 15; // 15 to 50
+    } else if (level === 4) {
+      num1 = Math.floor(Math.random() * 22) + 10; // 10 to 31
+      num2 = Math.floor(Math.random() * 22) + 10;
+    } else if (level === 5) {
+      num1 = Math.floor(Math.random() * 28) + 12; // 12 to 39
+      num2 = Math.floor(Math.random() * 28) + 12;
+    } else if (level === 6) {
+      num1 = Math.floor(Math.random() * 35) + 15; // 15 to 49
       num2 = Math.floor(Math.random() * 35) + 15;
+    } else if (level === 7) {
+      num1 = Math.floor(Math.random() * 45) + 20; // 20 to 64
+      num2 = Math.floor(Math.random() * 45) + 20;
+    } else if (level === 8) {
+      num1 = Math.floor(Math.random() * 60) + 25; // 25 to 84
+      num2 = Math.floor(Math.random() * 60) + 25;
+    } else if (level === 9) {
+      num1 = Math.floor(Math.random() * 80) + 30; // 30 to 109
+      num2 = Math.floor(Math.random() * 80) + 30;
+    } else {
+      // Level 10
+      num1 = Math.floor(Math.random() * 100) + 40; // 40 to 139
+      num2 = Math.floor(Math.random() * 100) + 40;
     }
     answer = num1 + num2;
   } else if (op === '-') {
@@ -63,11 +90,33 @@ function generateProblem(op, level) {
       num2 = Math.floor(Math.random() * 8) + 2;
       num1 = num2 + Math.floor(Math.random() * 10) + 1; // ensure positive
     } else if (level === 2) {
+      num2 = Math.floor(Math.random() * 12) + 3;
+      num1 = num2 + Math.floor(Math.random() * 14) + 2;
+    } else if (level === 3) {
       num2 = Math.floor(Math.random() * 18) + 5;
       num1 = num2 + Math.floor(Math.random() * 20) + 3;
-    } else {
+    } else if (level === 4) {
+      num2 = Math.floor(Math.random() * 22) + 6;
+      num1 = num2 + Math.floor(Math.random() * 25) + 4;
+    } else if (level === 5) {
+      num2 = Math.floor(Math.random() * 26) + 8;
+      num1 = num2 + Math.floor(Math.random() * 32) + 5;
+    } else if (level === 6) {
       num2 = Math.floor(Math.random() * 30) + 10;
       num1 = num2 + Math.floor(Math.random() * 40) + 5;
+    } else if (level === 7) {
+      num2 = Math.floor(Math.random() * 38) + 12;
+      num1 = num2 + Math.floor(Math.random() * 50) + 6;
+    } else if (level === 8) {
+      num2 = Math.floor(Math.random() * 48) + 15;
+      num1 = num2 + Math.floor(Math.random() * 65) + 8;
+    } else if (level === 9) {
+      num2 = Math.floor(Math.random() * 60) + 18;
+      num1 = num2 + Math.floor(Math.random() * 80) + 10;
+    } else {
+      // Level 10
+      num2 = Math.floor(Math.random() * 75) + 25;
+      num1 = num2 + Math.floor(Math.random() * 100) + 12;
     }
     answer = num1 - num2;
   } else if (op === '*') {
@@ -75,23 +124,67 @@ function generateProblem(op, level) {
       num1 = Math.floor(Math.random() * 7) + 2; // 2 to 8
       num2 = Math.floor(Math.random() * 7) + 2;
     } else if (level === 2) {
-      num1 = Math.floor(Math.random() * 9) + 3; // 3 to 12
+      num1 = Math.floor(Math.random() * 8) + 2; // 2 to 9
+      num2 = Math.floor(Math.random() * 8) + 2;
+    } else if (level === 3) {
+      num1 = Math.floor(Math.random() * 9) + 3; // 3 to 11
       num2 = Math.floor(Math.random() * 9) + 3;
-    } else {
-      num1 = Math.floor(Math.random() * 11) + 4; // 4 to 15
+    } else if (level === 4) {
+      num1 = Math.floor(Math.random() * 10) + 3; // 3 to 12
+      num2 = Math.floor(Math.random() * 9) + 3;
+    } else if (level === 5) {
+      num1 = Math.floor(Math.random() * 11) + 4; // 4 to 14
+      num2 = Math.floor(Math.random() * 9) + 3;
+    } else if (level === 6) {
+      num1 = Math.floor(Math.random() * 12) + 4; // 4 to 15
+      num2 = Math.floor(Math.random() * 10) + 4;
+    } else if (level === 7) {
+      num1 = Math.floor(Math.random() * 14) + 5; // 5 to 18
       num2 = Math.floor(Math.random() * 11) + 4;
+    } else if (level === 8) {
+      num1 = Math.floor(Math.random() * 16) + 6; // 6 to 21
+      num2 = Math.floor(Math.random() * 12) + 4;
+    } else if (level === 9) {
+      num1 = Math.floor(Math.random() * 18) + 7; // 7 to 24
+      num2 = Math.floor(Math.random() * 13) + 5;
+    } else {
+      // Level 10
+      num1 = Math.floor(Math.random() * 20) + 8; // 8 to 27
+      num2 = Math.floor(Math.random() * 14) + 6;
     }
     answer = num1 * num2;
   } else if (op === '%') {
     if (level === 1) {
       num2 = Math.floor(Math.random() * 4) + 2; // 2 to 5
-      num1 = Math.floor(Math.random() * 15) + 5; // 5 to 20
+      num1 = Math.floor(Math.random() * 15) + 5; // 5 to 19
     } else if (level === 2) {
+      num2 = Math.floor(Math.random() * 5) + 2; // 2 to 6
+      num1 = Math.floor(Math.random() * 20) + 8;
+    } else if (level === 3) {
       num2 = Math.floor(Math.random() * 6) + 3; // 3 to 8
       num1 = Math.floor(Math.random() * 25) + 10;
-    } else {
+    } else if (level === 4) {
+      num2 = Math.floor(Math.random() * 7) + 3; // 3 to 9
+      num1 = Math.floor(Math.random() * 32) + 12;
+    } else if (level === 5) {
       num2 = Math.floor(Math.random() * 8) + 4; // 4 to 11
-      num1 = Math.floor(Math.random() * 45) + 15;
+      num1 = Math.floor(Math.random() * 40) + 15;
+    } else if (level === 6) {
+      num2 = Math.floor(Math.random() * 8) + 4;
+      num1 = Math.floor(Math.random() * 50) + 18;
+    } else if (level === 7) {
+      num2 = Math.floor(Math.random() * 9) + 5;
+      num1 = Math.floor(Math.random() * 65) + 22;
+    } else if (level === 8) {
+      num2 = Math.floor(Math.random() * 10) + 5;
+      num1 = Math.floor(Math.random() * 80) + 25;
+    } else if (level === 9) {
+      num2 = Math.floor(Math.random() * 12) + 6;
+      num1 = Math.floor(Math.random() * 100) + 30;
+    } else {
+      // Level 10
+      num2 = Math.floor(Math.random() * 15) + 6;
+      num1 = Math.floor(Math.random() * 120) + 35;
     }
     answer = num1 % num2;
   }
@@ -123,6 +216,7 @@ export const TargetNumberGameModal = ({
   const [gameState, setGameState] = useState('select_mode');
   const [selectedOperator, setSelectedOperator] = useState('+');
   const [currentLevel, setCurrentLevel] = useState(1);
+  const [unlockedLevels, setUnlockedLevels] = useState({ '+': 1, '-': 1, '*': 1, '%': 1 });
 
   // Active round state
   const [sessionId, setSessionId] = useState(null);
@@ -141,21 +235,35 @@ export const TargetNumberGameModal = ({
   const sessionIdRef = useRef(null);
   const answersHistoryRef = useRef([]);
   const progressAnim = useRef(new Animated.Value(1)).current;
+  const userInputRef = useRef('');
+  const isProcessingRef = useRef(false);
+
+  // Sync ref and release processing lock whenever problem advances
+  useEffect(() => {
+    isProcessingRef.current = false;
+  }, [currentProblemIdx]);
 
   const currentLevelConfig = LEVEL_CONFIGS[currentLevel] || LEVEL_CONFIGS[1];
   const currentProblem = problems[currentProblemIdx] || null;
 
-  // 1. Restore active game session if one exists in persistent storage
+  // 1. Restore active game session & load persistent unlocked levels progress
   useEffect(() => {
     let isMounted = true;
     if (!visible) return;
 
     async function checkAndRestoreSession() {
       try {
-        const saved = await GamePersistenceService.getActiveSession(user?.id);
-        if (!isMounted || !saved) return;
+        const [saved, unlocked] = await Promise.all([
+          GamePersistenceService.getActiveSession(user?.id),
+          GamePersistenceService.getUnlockedLevels(user?.id),
+        ]);
+        if (!isMounted) return;
 
-        if (saved.status === 'in_progress' && Array.isArray(saved.problems) && saved.problems.length > 0) {
+        if (unlocked) {
+          setUnlockedLevels(unlocked);
+        }
+
+        if (saved && saved.status === 'in_progress' && Array.isArray(saved.problems) && saved.problems.length > 0) {
           const maxLimit = saved.timeLimit || 30;
           const remaining = GamePersistenceService.calculateRemainingSeconds(saved.endTime, maxLimit);
 
@@ -170,6 +278,7 @@ export const TargetNumberGameModal = ({
           setCurrentLevel(saved.level || 1);
           setScore(saved.score || 0);
           setCombo(saved.combo || 0);
+          userInputRef.current = saved.userInput || '';
           setUserInput(saved.userInput || '');
           setAnswersHistory(saved.answersHistory || []);
 
@@ -185,9 +294,15 @@ export const TargetNumberGameModal = ({
               endedAt: new Date().toISOString(),
             });
           }
+        } else if (unlocked) {
+          // Adjust level if exceeding unlocked bound for current operator
+          const opUnlocked = unlocked[selectedOperator] || 1;
+          if (currentLevel > opUnlocked) {
+            setCurrentLevel(Math.min(10, opUnlocked));
+          }
         }
       } catch (err) {
-        console.warn('Error restoring Target Number session:', err);
+        console.warn('Error restoring Target Number session or levels:', err);
       }
     }
 
@@ -218,6 +333,7 @@ export const TargetNumberGameModal = ({
       setSessionId(newSessionId);
       setProblems(generated);
       setCurrentProblemIdx(0);
+      userInputRef.current = '';
       setUserInput('');
       setTimeLeft(config.timeLimit);
       setScore(0);
@@ -412,6 +528,8 @@ export const TargetNumberGameModal = ({
   const handleCheckAnswer = useCallback(
     async (valueToTest) => {
       if (!currentProblem || gameState !== 'playing') return;
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
 
       const numVal = parseInt(valueToTest, 10);
       const isCorrect = numVal === currentProblem.answer;
@@ -435,6 +553,9 @@ export const TargetNumberGameModal = ({
 
         // Advance question or complete level
         const nextIdx = currentProblemIdx + 1;
+        userInputRef.current = '';
+        setUserInput('');
+
         if (nextIdx >= currentLevelConfig.totalQuestions) {
           // LEVEL COMPLETED!
           if (timerRef.current) {
@@ -488,7 +609,6 @@ export const TargetNumberGameModal = ({
           if (onSessionComplete) onSessionComplete();
         } else {
           setCurrentProblemIdx(nextIdx);
-          setUserInput('');
           // Persist progress update to storage
           await GamePersistenceService.updateActiveSession(user?.id, {
             currentProblemIdx: nextIdx,
@@ -502,7 +622,9 @@ export const TargetNumberGameModal = ({
         // Wrong answer
         setCombo(0);
         setFeedback({ type: 'wrong', text: `Incorrect! (${currentProblem.answer})` });
+        userInputRef.current = '';
         setUserInput('');
+        isProcessingRef.current = false;
 
         const updatedHistory = [
           ...answersHistoryRef.current,
@@ -523,22 +645,43 @@ export const TargetNumberGameModal = ({
     [currentProblem, currentLevelConfig, currentProblemIdx, gameState, timeLeft, combo, score, addXp, user?.id, currentLevel, selectedOperator, onSessionComplete]
   );
 
-  // Keypad number press
-  const handleNumpadPress = (digit) => {
-    if (userInput.length < 5) {
-      setUserInput((prev) => prev + digit);
-    }
-  };
+  // Keypad number press with Instant Auto-Submit when correct answer is entered
+  const handleNumpadPress = useCallback(
+    (digit) => {
+      if (gameState !== 'playing' || !currentProblem) return;
+      if (isProcessingRef.current) return;
 
-  const handleNumpadDelete = () => {
-    setUserInput((prev) => prev.slice(0, -1));
-  };
+      const currentVal = userInputRef.current;
+      if (currentVal.length >= 5) return;
 
-  const handleNumpadSubmit = () => {
-    if (userInput.trim() !== '') {
-      handleCheckAnswer(userInput);
+      const nextVal = currentVal === '0' ? digit : currentVal + digit;
+      userInputRef.current = nextVal;
+      setUserInput(nextVal);
+
+      // Auto-submit immediately if the entered number matches the problem answer
+      const numVal = parseInt(nextVal, 10);
+      if (!isNaN(numVal) && numVal === currentProblem.answer) {
+        handleCheckAnswer(nextVal);
+      }
+    },
+    [gameState, currentProblem, handleCheckAnswer]
+  );
+
+  const handleNumpadDelete = useCallback(() => {
+    if (gameState !== 'playing') return;
+    const nextVal = userInputRef.current.slice(0, -1);
+    userInputRef.current = nextVal;
+    setUserInput(nextVal);
+  }, [gameState]);
+
+  const handleNumpadSubmit = useCallback(() => {
+    if (gameState !== 'playing' || !currentProblem) return;
+    if (isProcessingRef.current) return;
+    const val = userInputRef.current;
+    if (val.trim() !== '') {
+      handleCheckAnswer(val);
     }
-  };
+  }, [gameState, currentProblem, handleCheckAnswer]);
 
   // Explicit action to clear active session and return to select mode
   const handleBackToMenu = useCallback(async () => {
@@ -569,7 +712,7 @@ export const TargetNumberGameModal = ({
       const handleKeyDown = (e) => {
         if (e.key >= '0' && e.key <= '9') {
           handleNumpadPress(e.key);
-        } else if (e.key === 'Backspace') {
+        } else if (e.key === 'Backspace' || e.key === 'Delete') {
           handleNumpadDelete();
         } else if (e.key === 'Enter') {
           handleNumpadSubmit();
@@ -578,7 +721,7 @@ export const TargetNumberGameModal = ({
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
     }
-  }, [gameState, userInput, currentProblem]);
+  }, [gameState, handleNumpadPress, handleNumpadDelete, handleNumpadSubmit]);
 
   if (!visible) return null;
 
@@ -748,9 +891,15 @@ export const TargetNumberGameModal = ({
 
                 {/* Calculation Target Equation Box */}
                 <View style={styles.equationCard}>
-                  <Text style={styles.equationEyebrow}>
-                    CALCULATE TARGET VALUE #{currentProblemIdx + 1} OF {currentLevelConfig.totalQuestions}
-                  </Text>
+                  <View style={styles.equationEyebrowRow}>
+                    <Text style={styles.equationEyebrow}>
+                      CALCULATE TARGET VALUE #{currentProblemIdx + 1} OF {currentLevelConfig.totalQuestions}
+                    </Text>
+                    <View style={styles.autoSubmitPill}>
+                      <Ionicons name="flash" size={10} color="#39FF14" style={{ marginRight: 3 }} />
+                      <Text style={styles.autoSubmitPillText}>AUTO-SUBMIT ON CORRECT</Text>
+                    </View>
+                  </View>
                   <View style={styles.equationRow}>
                     <Text style={styles.equationNumber}>{currentProblem.num1}</Text>
                     <Text style={styles.equationOperator}>
@@ -758,7 +907,7 @@ export const TargetNumberGameModal = ({
                     </Text>
                     <Text style={styles.equationNumber}>{currentProblem.num2}</Text>
                     <Text style={styles.equationEquals}>=</Text>
-                    <View style={styles.equationAnswerTarget}>
+                    <View style={[styles.equationAnswerTarget, userInput.length > 0 && styles.equationAnswerTargetActive]}>
                       <Text style={styles.equationAnswerTargetText}>
                         {userInput.length > 0 ? userInput : '?'}
                       </Text>
@@ -1265,12 +1414,36 @@ const styles = StyleSheet.create({
         }
       : {}),
   },
+  equationEyebrowRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    width: '100%',
+    marginBottom: 8,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  autoSubmitPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.4)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 12,
+  },
+  autoSubmitPillText: {
+    color: '#39FF14',
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
   equationEyebrow: {
     color: colors.primary,
     fontSize: 10,
     fontWeight: '800',
     letterSpacing: 1,
-    marginBottom: 8,
   },
   equationRow: {
     flexDirection: 'row',
@@ -1304,6 +1477,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 8,
+  },
+  equationAnswerTargetActive: {
+    borderColor: '#39FF14',
+    backgroundColor: 'rgba(57, 255, 20, 0.28)',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 0 12px rgba(57, 255, 20, 0.4)',
+        }
+      : {}),
   },
   equationAnswerTargetText: {
     color: colors.primary,
