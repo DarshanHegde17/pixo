@@ -30,17 +30,18 @@ const OPERATORS = [
 
 // Level configurations: 10 Levels for each operator in Target Number
 // Level 1 must be completed to unlock Level 2, Level 2 to unlock Level 3, etc.
+// Rewards match Master Prompt Section 4: Level 1 (10 XP, 2 Coins) to Level 10 (100 XP, 20 Coins)
 const LEVEL_CONFIGS = {
-  1: { level: 1, totalQuestions: 5, timeLimit: 30, title: 'LEVEL 1: ROOKIE RUSH', xpReward: 100, coinReward: 50 },
-  2: { level: 2, totalQuestions: 6, timeLimit: 30, title: 'LEVEL 2: NOVICE STRIKE', xpReward: 150, coinReward: 75 },
-  3: { level: 3, totalQuestions: 7, timeLimit: 30, title: 'LEVEL 3: VETERAN CRUNCH', xpReward: 200, coinReward: 100 },
-  4: { level: 4, totalQuestions: 8, timeLimit: 30, title: 'LEVEL 4: CIPHER SPRINT', xpReward: 250, coinReward: 125 },
-  5: { level: 5, totalQuestions: 9, timeLimit: 30, title: 'LEVEL 5: SPEED RUNNER', xpReward: 300, coinReward: 150 },
-  6: { level: 6, totalQuestions: 10, timeLimit: 30, title: 'LEVEL 6: CYBER MASTER', xpReward: 350, coinReward: 200 },
-  7: { level: 7, totalQuestions: 11, timeLimit: 30, title: 'LEVEL 7: MATRIX SURGE', xpReward: 420, coinReward: 250 },
-  8: { level: 8, totalQuestions: 12, timeLimit: 30, title: 'LEVEL 8: QUANTUM RUSH', xpReward: 500, coinReward: 300 },
-  9: { level: 9, totalQuestions: 13, timeLimit: 30, title: 'LEVEL 9: TITAN OVERCLOCK', xpReward: 600, coinReward: 350 },
-  10: { level: 10, totalQuestions: 15, timeLimit: 30, title: 'LEVEL 10: APEX LEGEND', xpReward: 800, coinReward: 500 },
+  1: { level: 1, totalQuestions: 5, timeLimit: 30, title: 'LEVEL 1: ROOKIE RUSH', xpReward: 10, coinReward: 2 },
+  2: { level: 2, totalQuestions: 6, timeLimit: 30, title: 'LEVEL 2: NOVICE STRIKE', xpReward: 20, coinReward: 4 },
+  3: { level: 3, totalQuestions: 7, timeLimit: 30, title: 'LEVEL 3: VETERAN CRUNCH', xpReward: 30, coinReward: 6 },
+  4: { level: 4, totalQuestions: 8, timeLimit: 30, title: 'LEVEL 4: CIPHER SPRINT', xpReward: 40, coinReward: 8 },
+  5: { level: 5, totalQuestions: 9, timeLimit: 30, title: 'LEVEL 5: SPEED RUNNER', xpReward: 50, coinReward: 10 },
+  6: { level: 6, totalQuestions: 10, timeLimit: 30, title: 'LEVEL 6: CYBER MASTER', xpReward: 60, coinReward: 12 },
+  7: { level: 7, totalQuestions: 11, timeLimit: 30, title: 'LEVEL 7: MATRIX SURGE', xpReward: 70, coinReward: 14 },
+  8: { level: 8, totalQuestions: 12, timeLimit: 30, title: 'LEVEL 8: QUANTUM RUSH', xpReward: 80, coinReward: 16 },
+  9: { level: 9, totalQuestions: 13, timeLimit: 30, title: 'LEVEL 9: TITAN OVERCLOCK', xpReward: 90, coinReward: 18 },
+  10: { level: 10, totalQuestions: 15, timeLimit: 30, title: 'LEVEL 10: APEX LEGEND', xpReward: 100, coinReward: 20 },
 };
 
 /**
@@ -595,10 +596,10 @@ export const TargetNumberGameModal = ({
                 icon: 'calculator',
               });
               await GamingActivityService.completeSession(user.id, sess.id, {
+                difficulty: currentLevel,
                 score: newScore,
                 durationSeconds: currentLevelConfig.timeLimit - timeLeft,
                 result: `Victory — Level ${currentLevel} Cleared`,
-                xpAwarded: xpEarned,
                 achievements: [`Target No. Level ${currentLevel} Winner`],
               });
             } catch (e) {

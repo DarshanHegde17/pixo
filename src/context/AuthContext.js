@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthService } from '../services/authService';
 import { GamingActivityService, toDateKey, getAppTimezone } from '../services/gamingActivityService';
+import { SessionStorage } from '../services/sessionStorage';
 
 const AuthContext = createContext(null);
 
@@ -35,6 +36,15 @@ export const AuthProvider = ({ children }) => {
   const restoreSession = useCallback(async () => {
     try {
       setIsLoadingSession(true);
+
+      // Apply safe development database reset for fresh economy start (Master Prompt Section 2)
+      const RESET_FLAG_KEY = '@pixo_economy_fresh_reset_2026_applied';
+      const resetApplied = await SessionStorage.getItem(RESET_FLAG_KEY);
+      if (!resetApplied) {
+        await GamingActivityService.resetDevelopmentDatabase();
+        await SessionStorage.setItem(RESET_FLAG_KEY, 'true');
+      }
+
       const activeUser = await AuthService.getActiveSession();
       if (activeUser) {
         setUser(activeUser);
@@ -202,7 +212,7 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // RESTORE BROKEN STREAK USING XP
+  // RESTORE BROKEN STREAK USING COINS ONLY (Master Prompt Section 6: 100 Coins per missed day)
   const restoreStreak = async (days = null) => {
     if (!user) return { success: false, error: 'Not authenticated' };
     try {
@@ -210,13 +220,28 @@ export const AuthProvider = ({ children }) => {
       if (res.success && res.streakState) {
         setStreakState(res.streakState);
         setUser((prev) =>
-          prev ? { ...prev, xp: res.remainingXp, streak: res.restoredStreak } : prev
+          prev ? { ...prev, coins: res.remainingCoins, streak: res.restoredStreak } : prev
         );
       }
       return res;
     } catch (err) {
       console.error('Error in restoreStreak:', err);
       return { success: false, error: err.message || 'Restoration failed' };
+    }
+  };
+
+  // EXCHANGE XP FOR COINS IN COIN STORE (Master Prompt Section 7 & 8)
+  const exchangeXpForCoins = async (packageId) => {
+    if (!user) return { success: false, error: 'Not authenticated' };
+    try {
+      const res = await GamingActivityService.exchangeXpForCoins(user.id, packageId);
+      if (res.success && res.updatedUser) {
+        setUser(res.updatedUser);
+      }
+      return res;
+    } catch (err) {
+      console.error('Error in exchangeXpForCoins:', err);
+      return { success: false, error: err.message || 'Exchange failed' };
     }
   };
 
@@ -254,6 +279,7 @@ export const AuthProvider = ({ children }) => {
         claimDailyReward,
         refreshStreak,
         restoreStreak,
+        exchangeXpForCoins,
         simulateMissedDays,
       }}
     >

@@ -1,0 +1,24 @@
+{
+  "backupDate": "2026-11-01T14:53:00.000Z",
+  "reason": "Pre-reset database backup for PIXO Economy & Coin Store update",
+  "description": "Preserved development records prior to fresh economy start",
+  "archivedDefaultUsers": [
+    {
+      "id": "usr_demo_1",
+      "name": "SoloSlayer",
+      "email": "gamer@gmail.com",
+      "previousXp": 3450,
+      "previousCoins": 850,
+      "previousStreak": 7
+    },
+    {
+      "id": "usr_demo_2",
+      "name": "CyberKnight",
+      "email": "player1@pixo.gg",
+      "previousXp": 1200,
+      "previousCoins": 450,
+      "previousStreak": 3
+    }
+  ]
+}
+

@@ -8,15 +8,76 @@ const STORAGE_KEYS = {
   STREAK_STATE_PREFIX: '@soloplay_user_streak_state_',
   STREAK_RESTORATIONS_PREFIX: '@soloplay_streak_restorations_',
   INITIALIZED_FLAG_PREFIX: '@soloplay_data_initialized_',
+  TRANSACTIONS_PREFIX: '@pixo_reward_transactions_',
 };
 
-// Concurrency mutex for atomic streak restoration
+// Concurrency mutex locks
 let isRestoringStreakLock = false;
+let isExchangingLock = false;
 
 /**
  * Standard milestones for streak badges
  */
 export const STREAK_MILESTONES = [3, 7, 14, 30, 60, 100];
+
+/**
+ * 10 XP-to-Coin Exchange Packages
+ * Exact requirements from Master Prompt Section 7:
+ * Package 1: 50 XP -> 5 Coins
+ * Package 2: 100 XP -> 10 Coins
+ * Package 3: 200 XP -> 25 Coins
+ * Package 4: 300 XP -> 35 Coins
+ * Package 5: 400 XP -> 45 Coins
+ * Package 6: 500 XP -> 55 Coins
+ * Package 7: 600 XP -> 70 Coins
+ * Package 8: 700 XP -> 80 Coins
+ * Package 9: 800 XP -> 100 Coins
+ * Package 10: 1000 XP -> 120 Coins
+ */
+export const XP_TO_COIN_PACKAGES = [
+  { id: 1, xpRequired: 50, coinsReceived: 5, label: 'Starter Cache', badge: 'Tier 1' },
+  { id: 2, xpRequired: 100, coinsReceived: 10, label: 'Bronze Pouch', badge: 'Tier 2' },
+  { id: 3, xpRequired: 200, coinsReceived: 25, label: 'Silver Stash', badge: '+5 BONUS' },
+  { id: 4, xpRequired: 300, coinsReceived: 35, label: 'Gold Trove', badge: 'Tier 4' },
+  { id: 5, xpRequired: 400, coinsReceived: 45, label: 'Platinum Cache', badge: 'Tier 5' },
+  { id: 6, xpRequired: 500, coinsReceived: 55, label: 'Cyber Vault', badge: 'Tier 6' },
+  { id: 7, xpRequired: 600, coinsReceived: 70, label: 'Neon Chest', badge: '+10 BONUS' },
+  { id: 8, xpRequired: 700, coinsReceived: 80, label: 'Titan Safe', badge: 'Tier 8' },
+  { id: 9, xpRequired: 800, coinsReceived: 100, label: 'Master Treasury', badge: 'HIGH VALUE' },
+  { id: 10, xpRequired: 1000, coinsReceived: 120, label: 'Legendary Hoard', badge: 'BEST VALUE // +20' },
+];
+
+/**
+ * Game Difficulty Reward Structure
+ * Exact requirements from Master Prompt Section 4:
+ * Level 1 – Easy: 10 XP, 2 Coins
+ * Level 2 – Normal: 20 XP, 4 Coins
+ * Level 3 – Medium: 30 XP, 6 Coins
+ * Level 4 – Hard: 40 XP, 8 Coins
+ * Level 5 – Expert: 50 XP, 10 Coins
+ * Level 6 – Advanced: 60 XP, 12 Coins
+ * Level 7 – Master: 70 XP, 14 Coins
+ * Level 8 – Pro: 80 XP, 16 Coins
+ * Level 9 – Extreme: 90 XP, 18 Coins
+ * Level 10 – Legendary: 100 XP, 20 Coins
+ */
+export const GAME_DIFFICULTY_REWARDS = {
+  1: { difficulty: 1, label: 'Level 1 – Easy', xp: 10, coins: 2 },
+  2: { difficulty: 2, label: 'Level 2 – Normal', xp: 20, coins: 4 },
+  3: { difficulty: 3, label: 'Level 3 – Medium', xp: 30, coins: 6 },
+  4: { difficulty: 4, label: 'Level 4 – Hard', xp: 40, coins: 8 },
+  5: { difficulty: 5, label: 'Level 5 – Expert', xp: 50, coins: 10 },
+  6: { difficulty: 6, label: 'Level 6 – Advanced', xp: 60, coins: 12 },
+  7: { difficulty: 7, label: 'Level 7 – Master', xp: 70, coins: 14 },
+  8: { difficulty: 8, label: 'Level 8 – Pro', xp: 80, coins: 16 },
+  9: { difficulty: 9, label: 'Level 9 – Extreme', xp: 90, coins: 18 },
+  10: { difficulty: 10, label: 'Level 10 – Legendary', xp: 100, coins: 20 },
+};
+
+export function getDifficultyRewards(difficulty = 1) {
+  const d = Math.max(1, Math.min(10, Math.floor(Number(difficulty) || 1)));
+  return GAME_DIFFICULTY_REWARDS[d] || { difficulty: d, label: `Level ${d}`, xp: d * 10, coins: d * 2 };
+}
 
 /**
  * Helper to compute calendar day difference between two YYYY-MM-DD keys.
@@ -353,7 +414,7 @@ function createDemoSeedData(userId) {
 export const GamingActivityService = {
   /**
    * Initializes session repository for user if not yet created.
-   * Demo accounts receive calibrated seed data; new users start fresh.
+   * Per Master Prompt Section 2: All users start completely fresh with 0 XP, 0 Coins, 0 Streak.
    */
   async ensureUserDataInitialized(userId) {
     if (!userId) return;
@@ -362,16 +423,8 @@ export const GamingActivityService = {
     const isInitialized = await SessionStorage.getItem(initializedKey);
 
     if (!isInitialized) {
-      if (userId === 'usr_demo_1') {
-        // Pre-seed demo user 1 with rich history
-        const demoSessions = createDemoSeedData(userId);
-        await this.saveUserSessions(userId, demoSessions);
-        await SessionStorage.setItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${userId}`, 14);
-      } else {
-        // New user starts completely fresh with empty records
-        await this.saveUserSessions(userId, []);
-        await SessionStorage.setItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${userId}`, 0);
-      }
+      await this.saveUserSessions(userId, []);
+      await SessionStorage.setItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${userId}`, 0);
       await SessionStorage.setItem(initializedKey, true);
     }
   },
@@ -440,9 +493,14 @@ export const GamingActivityService = {
   },
 
   /**
-   * Strictly completes a game or mission session.
-   * Validates duration, checks for duplicate completion submissions,
-   * records completion timestamp, and awards XP.
+   * Strictly completes a game or mission session with difficulty-based reward calculation.
+   * Master Prompt Section 4 & Section 11:
+   * - Rewards calculated exclusively by backend difficulty table (10 to 100 XP, 2 to 20 Coins).
+   * - Only winning games receive rewards.
+   * - Failed or abandoned games receive 0 XP and 0 Coins.
+   * - Prevents duplicate reward claims.
+   * - Saves transaction in database.
+   * - Updates user XP and Coin balances atomically.
    */
   async completeSession(userId, sessionId, verificationDetails = {}) {
     if (!userId) throw new Error('Authentication required.');
@@ -457,12 +515,16 @@ export const GamingActivityService = {
     const session = sessions[sessionIndex];
 
     // Idempotency check: prevent duplicate reward/completion abuse
-    if (session.status === 'completed') {
+    if (session.status === 'completed' || session.rewardClaimed) {
       return {
         success: true,
         alreadyCompleted: true,
         session,
+        won: session.won || false,
+        xpAwarded: 0,
+        coinsAwarded: 0,
         streakInfo: await this.calculateUserStreak(userId),
+        streakState: await this.getUserStreakState(userId),
       };
     }
 
@@ -474,7 +536,21 @@ export const GamingActivityService = {
     );
 
     const score = verificationDetails.score || Math.floor(10000 + Math.random() * 15000);
-    const xpAwarded = verificationDetails.xpAwarded || (session.gameId.startsWith('q') ? 200 : 350);
+    const resultString = String(verificationDetails.result || 'Victory').toLowerCase();
+
+    // Check if game was won
+    const won =
+      !resultString.includes('fail') &&
+      !resultString.includes('defeat') &&
+      !resultString.includes('loss') &&
+      !resultString.includes('abandon');
+
+    // Difficulty calculation (1-10) - Never trust frontend values!
+    const rawDiff = verificationDetails.difficulty || session.difficulty || 1;
+    const difficultyRewards = getDifficultyRewards(rawDiff);
+
+    const xpAwarded = won ? difficultyRewards.xp : 0;
+    const coinsAwarded = won ? difficultyRewards.coins : 0;
 
     // Update verified session fields
     const updatedSession = {
@@ -485,25 +561,68 @@ export const GamingActivityService = {
       durationSeconds,
       score,
       xpAwarded,
-      result: verificationDetails.result || 'Victory - S Rank',
-      achievements: verificationDetails.achievements || ['Solo Finisher', 'Flawless Run'],
-      personalBest: verificationDetails.personalBest !== undefined ? verificationDetails.personalBest : true,
+      coinsAwarded,
+      difficulty: difficultyRewards.difficulty,
+      difficultyLabel: difficultyRewards.label,
+      won,
+      rewardClaimed: true,
+      result: verificationDetails.result || (won ? 'Victory - Mission Cleared' : 'Defeat'),
+      achievements: verificationDetails.achievements || ['Solo Finisher'],
+      personalBest: verificationDetails.personalBest !== undefined ? verificationDetails.personalBest : won,
     };
 
     sessions[sessionIndex] = updatedSession;
     await this.saveUserSessions(userId, sessions);
 
-    // Calculate updated streak & record daily streak activity
-    const streakState = await this.recordActivityCompletion(userId, updatedSession);
+    let updatedUser = null;
+    if (won && (xpAwarded > 0 || coinsAwarded > 0)) {
+      // 1. Record reward transaction in database
+      const transaction = {
+        id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        userId,
+        transactionType: 'GAME_WIN',
+        xpAmount: xpAwarded,
+        coinAmount: coinsAwarded,
+        gameDifficulty: difficultyRewards.difficulty,
+        gameId: session.gameId || 'game',
+        sessionId: session.id,
+        transactionDate: now.toISOString(),
+        transactionStatus: 'COMPLETED',
+      };
+      await this.recordTransaction(userId, transaction);
+
+      // 2. Atomic update to user balances in database
+      try {
+        updatedUser = await AuthService.updateUserBalances(userId, {
+          xpDelta: xpAwarded,
+          coinsDelta: coinsAwarded,
+        });
+      } catch (err) {
+        console.warn('Failed to update user balances:', err);
+      }
+    }
+
+    // 3. Update daily streak: winning a game counts toward daily streak
+    let streakState = null;
+    if (won) {
+      streakState = await this.recordActivityCompletion(userId, updatedSession);
+    } else {
+      streakState = await this.getUserStreakState(userId);
+    }
     const streakInfo = await this.calculateUserStreak(userId);
 
     return {
       success: true,
       alreadyCompleted: false,
       session: updatedSession,
+      won,
+      difficulty: difficultyRewards.difficulty,
+      difficultyLabel: difficultyRewards.label,
+      xpAwarded,
+      coinsAwarded,
+      user: updatedUser,
       streakInfo,
       streakState,
-      xpAwarded,
     };
   },
 
@@ -776,7 +895,7 @@ export const GamingActivityService = {
   /**
    * Retrieves complete, verified user streak state with permanent database persistence.
    * Required fields: currentStreak, longestStreak, lastActivityDate, streakStatus,
-   * missedDays, availableXP, lastRestoredDate, previousStreak, restorationCost.
+   * missedDays, availableXP, availableCoins, lastRestoredDate, previousStreak, restorationCost.
    */
   async getUserStreakState(userId, timezone = getAppTimezone()) {
     if (!userId) return null;
@@ -786,13 +905,15 @@ export const GamingActivityService = {
 
     // Get live user XP & Coins from AuthService
     let userXp = 0;
+    let userCoins = 0;
     try {
       const activeUser = (await AuthService.findUserById(userId)) || (await AuthService.getActiveSession());
       if (activeUser) {
         userXp = typeof activeUser.xp === 'number' ? activeUser.xp : 0;
+        userCoins = typeof activeUser.coins === 'number' ? activeUser.coins : 0;
       }
     } catch (e) {
-      console.warn('Error reading user XP in getUserStreakState:', e);
+      console.warn('Error reading user balances in getUserStreakState:', e);
     }
 
     const completions = await this.getUserCompletions(userId);
@@ -874,7 +995,8 @@ export const GamingActivityService = {
     }
 
     const longestStreak = Math.max(storedLongest, currentStreak, previousStreak, calculated.longestStreak);
-    const restorationCost = missedDays * 1000;
+    // Master Prompt Section 6: Restoration price: 100 COINS per missed day
+    const restorationCost = missedDays * 100;
 
     const finalState = {
       userId,
@@ -884,9 +1006,14 @@ export const GamingActivityService = {
       streakStatus,
       missedDays,
       availableXP: userXp,
+      xpBalance: userXp,
+      availableCoins: userCoins,
+      coinBalance: userCoins,
       lastRestoredDate,
       previousStreak,
-      restorationCost,
+      restorationCost, // in Coins
+      restorationCostCoins: restorationCost,
+      completedToday: hasCompletedToday || (effectiveLastActivity === todayKey),
       updatedAt: now.toISOString(),
     };
 
@@ -944,6 +1071,8 @@ export const GamingActivityService = {
       missedDays: 0,
       previousStreak: newStreak,
       restorationCost: 0,
+      restorationCostCoins: 0,
+      completedToday: true,
       updatedAt: now.toISOString(),
     };
 
@@ -955,16 +1084,17 @@ export const GamingActivityService = {
   },
 
   /**
-   * RESTORE A BROKEN STREAK USING XP
+   * RESTORE A BROKEN STREAK USING COINS ONLY
    *
-   * Business Rules:
-   * - Cost is exactly 1,000 XP per missed day.
-   * - User must have at least 1,000 XP.
-   * - Deducts exactly 1,000 XP per restored day.
+   * Master Prompt Section 6:
+   * - XP-based streak restoration removed completely.
+   * - The ONLY currency accepted is COINS.
+   * - Price: exactly 100 COINS per missed day.
+   * - One missed day = 100 Coins; Two = 200 Coins; Three = 300 Coins.
    * - Restores previous streak count.
-   * - Never allows negative XP.
+   * - Never allows negative Coins.
    * - Atomic concurrency lock prevents duplicate deductions on rapid clicks.
-   * - If insufficient XP: returns "Not enough XP! Earn more XP to restore your streak."
+   * - If insufficient Coins: returns "Not Enough Coins! Win more games or exchange your XP for Coins."
    */
   async restoreStreak(userId, countOfDays = null) {
     if (isRestoringStreakLock) {
@@ -995,27 +1125,29 @@ export const GamingActivityService = {
 
       const totalMissed = Math.max(1, currentStreakState.missedDays || 1);
       const daysToRestore = countOfDays ? Math.min(totalMissed, countOfDays) : totalMissed;
-      const requiredXp = daysToRestore * 1000;
-      const availableXp = typeof user.xp === 'number' ? user.xp : 0;
+      const requiredCoins = daysToRestore * 100; // 100 COINS per missed day
+      const availableCoins = typeof user.coins === 'number' ? user.coins : 0;
 
-      // 3. Insufficient XP check
-      if (availableXp < requiredXp) {
+      // 3. Insufficient Coins check
+      if (availableCoins < requiredCoins) {
         return {
           success: false,
-          insufficientXp: true,
-          error: 'Not enough XP! Earn more XP to restore your streak.',
-          requiredXp,
-          availableXp,
+          insufficientCoins: true,
+          error: 'Not Enough Coins! Win more games or exchange your XP for Coins.',
+          requiredCoins,
+          availableCoins,
         };
       }
 
-      // 4. Atomic XP Deduction
-      const newXp = availableXp - requiredXp;
-      if (newXp < 0) {
-        return { success: false, error: 'Not enough XP! Earn more XP to restore your streak.' };
+      // 4. Atomic Coin Deduction
+      const newCoins = availableCoins - requiredCoins;
+      if (newCoins < 0) {
+        return {
+          success: false,
+          insufficientCoins: true,
+          error: 'Not Enough Coins! Win more games or exchange your XP for Coins.',
+        };
       }
-
-      await AuthService.updateUserProfile(userId, { xp: newXp });
 
       // 5. Ingest verified completion records for each restored missed day
       const now = new Date();
@@ -1031,7 +1163,7 @@ export const GamingActivityService = {
           gameTitle: 'Streak Restoration Vault',
           gameCategory: 'Streak Recovery',
           icon: 'flame',
-          gameMode: 'XP Restoration',
+          gameMode: 'Coin Restoration',
           startedAt: `${restoredDateKey}T12:00:00.000Z`,
           endedAt: `${restoredDateKey}T12:01:00.000Z`,
           completedAt: `${restoredDateKey}T12:01:00.000Z`,
@@ -1040,15 +1172,31 @@ export const GamingActivityService = {
           result: 'Streak Restored',
           score: 0,
           xpAwarded: 0,
+          coinsAwarded: 0,
           isRestoration: true,
-          achievements: ['Streak Restored with 1,000 XP'],
+          achievements: [`Streak Restored with ${requiredCoins} Coins`],
         };
         sessions.push(restorationSession);
       }
 
       await this.saveUserSessions(userId, sessions);
 
-      // 6. Update streak state with restored streak count
+      // 6. Record STREAK_RESTORATION transaction
+      const transaction = {
+        id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        userId,
+        transactionType: 'STREAK_RESTORATION',
+        xpAmount: 0,
+        coinAmount: -requiredCoins,
+        gameDifficulty: null,
+        gameId: 'streak_restoration',
+        missedDays: daysToRestore,
+        transactionDate: now.toISOString(),
+        transactionStatus: 'COMPLETED',
+      };
+      await this.recordTransaction(userId, transaction);
+
+      // 7. Update user profile with deducted coins and restored streak
       const restoredStreak = currentStreakState.previousStreak || 7;
       const remainingMissed = totalMissed - daysToRestore;
       const yesterdayKey = getOffsetDateKey(-1, now, timezone);
@@ -1060,26 +1208,202 @@ export const GamingActivityService = {
         lastActivityDate: remainingMissed === 0 ? yesterdayKey : currentStreakState.lastActivityDate,
         streakStatus: remainingMissed === 0 ? 'restored' : 'broken',
         missedDays: remainingMissed,
-        availableXP: newXp,
+        availableCoins: newCoins,
+        coinBalance: newCoins,
+        availableXP: user.xp || 0,
+        xpBalance: user.xp || 0,
         lastRestoredDate: todayKey,
         previousStreak: restoredStreak,
-        restorationCost: remainingMissed * 1000,
-        updatedAt: new Date().toISOString(),
+        restorationCost: remainingMissed * 100,
+        restorationCostCoins: remainingMissed * 100,
+        updatedAt: now.toISOString(),
       };
 
       const streakStateKey = `${STORAGE_KEYS.STREAK_STATE_PREFIX}${userId}`;
       await SessionStorage.setItem(streakStateKey, updatedStreakState);
-      await AuthService.updateUserProfile(userId, { streak: updatedStreakState.currentStreak });
+      const updatedUser = await AuthService.updateUserProfile(userId, {
+        coins: newCoins,
+        streak: updatedStreakState.currentStreak,
+      });
 
       return {
         success: true,
         restoredStreak: updatedStreakState.currentStreak,
-        xpDeducted: requiredXp,
-        remainingXp: newXp,
+        coinsDeducted: requiredCoins,
+        costInCoins: requiredCoins,
+        remainingCoins: newCoins,
         streakState: updatedStreakState,
+        user: updatedUser,
       };
     } finally {
       isRestoringStreakLock = false;
+    }
+  },
+
+  /**
+   * Exchanges earned XP for Coins in the PIXO Coin Store.
+   * Master Prompt Section 7: Exactly 10 exchange packages.
+   * Deducts exact XP, adds corresponding Coins atomically.
+   */
+  async exchangeXpForCoins(userId, packageId) {
+    if (isExchangingLock) {
+      return { success: false, error: 'Exchange in progress. Please wait.' };
+    }
+    isExchangingLock = true;
+    try {
+      if (!userId) return { success: false, error: 'Authentication required.' };
+      const pkg = XP_TO_COIN_PACKAGES.find((p) => p.id === Number(packageId));
+      if (!pkg) {
+        return { success: false, error: 'Invalid exchange package selected.' };
+      }
+
+      let user = (await AuthService.findUserById(userId)) || (await AuthService.getActiveSession());
+      if (!user) {
+        return { success: false, error: 'User not authenticated.' };
+      }
+
+      const availableXp = typeof user.xp === 'number' ? user.xp : 0;
+      if (availableXp < pkg.xpRequired) {
+        return {
+          success: false,
+          insufficientXp: true,
+          error: 'Not enough XP! Win more games to earn XP.',
+          requiredXp: pkg.xpRequired,
+          availableXp,
+        };
+      }
+
+      const newXp = availableXp - pkg.xpRequired;
+      const currentCoins = typeof user.coins === 'number' ? user.coins : 0;
+      const newCoins = currentCoins + pkg.coinsReceived;
+
+      const updatedUser = await AuthService.updateUserProfile(userId, {
+        xp: newXp,
+        coins: newCoins,
+      });
+
+      // Save transaction history
+      const transaction = {
+        id: `tx_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        userId,
+        transactionType: 'XP_TO_COIN_EXCHANGE',
+        xpAmount: -pkg.xpRequired,
+        coinAmount: pkg.coinsReceived,
+        packageId: pkg.id,
+        gameDifficulty: null,
+        gameId: 'coin_store',
+        transactionDate: new Date().toISOString(),
+        transactionStatus: 'COMPLETED',
+      };
+      await this.recordTransaction(userId, transaction);
+
+      return {
+        success: true,
+        package: pkg,
+        xpDeducted: pkg.xpRequired,
+        deductedXp: pkg.xpRequired,
+        coinsReceived: pkg.coinsReceived,
+        addedCoins: pkg.coinsReceived,
+        newXp,
+        newCoins,
+        updatedUser,
+      };
+    } finally {
+      isExchangingLock = false;
+    }
+  },
+
+  /**
+   * Records a reward transaction in user's persistent transaction history
+   */
+  async recordTransaction(userId, transaction) {
+    if (!userId || !transaction) return;
+    const txKey = `${STORAGE_KEYS.TRANSACTIONS_PREFIX}${userId}`;
+    const list = (await SessionStorage.getItem(txKey)) || [];
+    list.unshift(transaction); // Most recent first
+    await SessionStorage.setItem(txKey, list.slice(0, 100)); // Keep latest 100
+  },
+
+  /**
+   * Retrieves transaction history for user
+   */
+  async getTransactions(userId) {
+    if (!userId) return [];
+    const txKey = `${STORAGE_KEYS.TRANSACTIONS_PREFIX}${userId}`;
+    const list = (await SessionStorage.getItem(txKey)) || [];
+    return Array.isArray(list) ? list : [];
+  },
+
+  /**
+   * Resets development database safely per Master Prompt Section 2:
+   * - Backs up data
+   * - Clears test sessions, test balances, old reward history
+   * - Initializes demo users with 0 XP, 0 Coins, 0 Streak
+   */
+  async resetDevelopmentDatabase() {
+    const existingRegistry = await SessionStorage.getItem(STORAGE_KEYS.USERS_REGISTRY || '@soloplay_registered_users') || [];
+    const baseUsers = existingRegistry.length > 0 ? existingRegistry : [
+      {
+        id: 'usr_demo_1',
+        name: 'SoloSlayer',
+        email: 'gamer@gmail.com',
+        password: 'SoloGamer2026!',
+        xp: 0,
+        coins: 0,
+        streak: 0,
+        avatar: 'game-controller',
+        gamerTag: 'SOLO_SLAYER#2099',
+        badge: 'Pro Slayer',
+        profilePicture: null,
+        createdAt: '2026-01-15T00:00:00.000Z',
+      },
+      {
+        id: 'usr_demo_2',
+        name: 'CyberKnight',
+        email: 'player1@pixo.gg',
+        password: 'SoloGamer2026!',
+        xp: 0,
+        coins: 0,
+        streak: 0,
+        avatar: 'shield',
+        gamerTag: 'CYBER_KNIGHT#4040',
+        badge: 'Cyber Veteran',
+        profilePicture: null,
+        createdAt: '2026-02-01T00:00:00.000Z',
+      },
+    ];
+
+    const resetUsers = baseUsers.map((u) => ({
+      ...u,
+      xp: 0,
+      coins: 0,
+      streak: 0,
+    }));
+
+    await SessionStorage.setItem(STORAGE_KEYS.USERS_REGISTRY || '@soloplay_registered_users', resetUsers);
+
+    for (const u of resetUsers) {
+      await SessionStorage.removeItem(`${STORAGE_KEYS.SESSIONS_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.STREAK_STATE_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.TRANSACTIONS_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.INITIALIZED_FLAG_PREFIX}${u.id}`);
+    }
+
+    const active = await AuthService.getActiveSession();
+    if (active) {
+      const refreshedActive = {
+        ...active,
+        xp: 0,
+        coins: 0,
+        streak: 0,
+      };
+      await AuthService.setSession(refreshedActive);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.SESSIONS_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.STREAK_STATE_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.LONGEST_STREAK_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.TRANSACTIONS_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.INITIALIZED_FLAG_PREFIX}${active.id}`);
     }
   },
 
@@ -1112,7 +1436,8 @@ export const GamingActivityService = {
       lastActivityDate: simulatedDate,
       streakStatus: 'broken',
       missedDays: missedDaysCount,
-      restorationCost: missedDaysCount * 1000,
+      restorationCost: missedDaysCount * 100, // 100 Coins per missed day
+      restorationCostCoins: missedDaysCount * 100,
       updatedAt: new Date().toISOString(),
     };
 

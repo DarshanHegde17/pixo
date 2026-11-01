@@ -16,19 +16,23 @@ import { colors, spacing, borderRadius } from '../../theme';
 /**
  * PIXO Restore Streak Confirmation Modal
  *
- * Strict Rules:
- * - Exactly 1,000 XP per missed day.
- * - Atomic confirmation popup before deducting XP.
- * - Shows available XP balance and balance after deduction.
- * - If user has insufficient XP: displays "Not enough XP! Earn more XP to restore your streak."
+ * Master Prompt Section 6:
+ * - Currency: COINS ONLY.
+ * - Exactly 100 COINS per missed day.
+ * - Atomic confirmation popup before deducting Coins.
+ * - Shows available Coins balance and balance after deduction.
+ * - If user has insufficient Coins: displays:
+ *   "Not Enough Coins! Win more games or exchange your XP for Coins."
  * - Prevents double deductions on rapid clicks.
  */
 export const RestoreStreakModal = ({
   visible,
   onClose,
   streakState,
+  availableCoins = 0,
   availableXp = 0,
   onConfirmRestore,
+  onOpenCoinStore,
 }) => {
   const { width } = useWindowDimensions();
   const isMobile = width < 520;
@@ -39,13 +43,13 @@ export const RestoreStreakModal = ({
 
   const previousStreak = streakState?.previousStreak || 7;
   const missedDays = Math.max(1, streakState?.missedDays || 1);
-  const restorationCost = streakState?.restorationCost || missedDays * 1000;
-  const hasEnoughXp = availableXp >= restorationCost;
-  const remainingXp = Math.max(0, availableXp - restorationCost);
+  const restorationCost = missedDays * 100; // 100 Coins per missed day
+  const hasEnoughCoins = availableCoins >= restorationCost;
+  const remainingCoins = Math.max(0, availableCoins - restorationCost);
 
   const handleConfirm = async () => {
-    if (!hasEnoughXp) {
-      setErrorMessage('Not enough XP! Earn more XP to restore your streak.');
+    if (!hasEnoughCoins) {
+      setErrorMessage('Not Enough Coins! Win more games or exchange your XP for Coins.');
       return;
     }
     if (isSubmitting) return;
@@ -89,7 +93,7 @@ export const RestoreStreakModal = ({
                 </View>
                 <View>
                   <Text style={styles.modalTitle}>RESTORE STREAK</Text>
-                  <Text style={styles.modalSub}>CONSECUTIVE DAYS RECOVERY</Text>
+                  <Text style={styles.modalSub}>COINS RESTORATION VAULT</Text>
                 </View>
               </View>
 
@@ -127,7 +131,7 @@ export const RestoreStreakModal = ({
 
               <View style={styles.breakdownRow}>
                 <Text style={styles.breakdownLabel}>Restoration Rate:</Text>
-                <Text style={styles.breakdownValue}>1,000 XP per missed day</Text>
+                <Text style={styles.breakdownValue}>100 Coins per missed day</Text>
               </View>
 
               <View style={styles.divider} />
@@ -135,33 +139,33 @@ export const RestoreStreakModal = ({
               <View style={styles.breakdownRow}>
                 <Text style={styles.breakdownCostLabel}>TOTAL RESTORATION COST:</Text>
                 <Text style={styles.breakdownCostValue}>
-                  {restorationCost.toLocaleString()} XP
+                  {restorationCost.toLocaleString()} Coins
                 </Text>
               </View>
 
               <View style={styles.breakdownRow}>
-                <Text style={styles.breakdownLabel}>Your Available XP Balance:</Text>
-                <Text style={[styles.breakdownValue, !hasEnoughXp && styles.insufficientValue]}>
-                  {availableXp.toLocaleString()} XP
+                <Text style={styles.breakdownLabel}>Your Available Coins:</Text>
+                <Text style={[styles.breakdownValue, !hasEnoughCoins && styles.insufficientValue]}>
+                  {availableCoins.toLocaleString()} Coins
                 </Text>
               </View>
 
-              {hasEnoughXp ? (
+              {hasEnoughCoins ? (
                 <View style={styles.breakdownRow}>
-                  <Text style={styles.breakdownLabel}>XP Balance After Restoration:</Text>
-                  <Text style={[styles.breakdownValue, { color: '#00E5FF' }]}>
-                    {remainingXp.toLocaleString()} XP
+                  <Text style={styles.breakdownLabel}>Coins Balance After:</Text>
+                  <Text style={[styles.breakdownValue, { color: '#FFD700' }]}>
+                    {remainingCoins.toLocaleString()} Coins
                   </Text>
                 </View>
               ) : null}
             </View>
 
             {/* Error or Warning Message */}
-            {!hasEnoughXp && (
+            {!hasEnoughCoins && (
               <View style={styles.errorBanner}>
                 <Ionicons name="close-circle" size={16} color="#FF3B30" style={{ marginRight: 6 }} />
                 <Text style={styles.errorBannerText}>
-                  Not enough XP! Earn more XP to restore your streak.
+                  Not Enough Coins! Win more games or exchange your XP for Coins.
                 </Text>
               </View>
             )}
@@ -181,6 +185,30 @@ export const RestoreStreakModal = ({
               </Text>
             </View>
 
+            {/* Quick Coin Store Shortcut if low on coins */}
+            {!hasEnoughCoins && onOpenCoinStore && (
+              <TouchableOpacity
+                style={styles.storeShortcutBtn}
+                onPress={() => {
+                  onClose();
+                  onOpenCoinStore();
+                }}
+                activeOpacity={0.8}
+              >
+                <LinearGradient
+                  colors={['rgba(255, 215, 0, 0.25)', 'rgba(57, 255, 20, 0.12)']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.storeShortcutGradient}
+                >
+                  <Ionicons name="cash" size={16} color="#FFD700" style={{ marginRight: 6 }} />
+                  <Text style={styles.storeShortcutText}>
+                    GO TO COIN STORE — EXCHANGE XP FOR COINS
+                  </Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
+
             {/* Action Buttons */}
             <View style={styles.actionsRow}>
               <TouchableOpacity
@@ -195,17 +223,17 @@ export const RestoreStreakModal = ({
               <TouchableOpacity
                 style={[
                   styles.confirmBtn,
-                  !hasEnoughXp && styles.confirmBtnDisabled,
+                  !hasEnoughCoins && styles.confirmBtnDisabled,
                   isSubmitting && styles.confirmBtnSubmitting,
                 ]}
                 onPress={handleConfirm}
-                disabled={!hasEnoughXp || isSubmitting}
+                disabled={!hasEnoughCoins || isSubmitting}
                 activeOpacity={0.85}
               >
                 <LinearGradient
                   colors={
-                    hasEnoughXp
-                      ? ['#39FF14', '#00E5FF']
+                    hasEnoughCoins
+                      ? ['#FFD700', '#FF9500']
                       : ['rgba(255, 255, 255, 0.1)', 'rgba(255, 255, 255, 0.05)']
                   }
                   start={{ x: 0, y: 0 }}
@@ -217,20 +245,20 @@ export const RestoreStreakModal = ({
                   ) : (
                     <>
                       <Ionicons
-                        name="flash"
+                        name="cash"
                         size={15}
-                        color={hasEnoughXp ? '#050705' : 'rgba(255, 255, 255, 0.4)'}
+                        color={hasEnoughCoins ? '#050705' : 'rgba(255, 255, 255, 0.4)'}
                         style={{ marginRight: 6 }}
                       />
                       <Text
                         style={[
                           styles.confirmBtnText,
-                          !hasEnoughXp && styles.confirmBtnTextDisabled,
+                          !hasEnoughCoins && styles.confirmBtnTextDisabled,
                         ]}
                       >
-                        {hasEnoughXp
-                          ? `CONFIRM & DEDUCT ${restorationCost.toLocaleString()} XP`
-                          : `NEED ${(restorationCost - availableXp).toLocaleString()} MORE XP`}
+                        {hasEnoughCoins
+                          ? `CONFIRM & DEDUCT ${restorationCost.toLocaleString()} COINS`
+                          : `NEED ${(restorationCost - availableCoins).toLocaleString()} MORE COINS`}
                       </Text>
                     </>
                   )}
@@ -422,6 +450,27 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+  },
+  storeShortcutBtn: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.4)',
+    marginBottom: 14,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  storeShortcutGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  storeShortcutText: {
+    color: '#FFD700',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.5,
   },
   cancelBtn: {
     flex: 1,

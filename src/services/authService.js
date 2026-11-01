@@ -1,22 +1,22 @@
 import { SessionStorage } from './sessionStorage.js';
 
-const STORAGE_KEYS = {
+export const STORAGE_KEYS = {
   CURRENT_SESSION: '@soloplay_active_session',
   USERS_REGISTRY: '@soloplay_registered_users',
   PENDING_OTP: '@soloplay_pending_otp_record',
 };
 
-// Pre-seeded demo / existing accounts
+// Pre-seeded demo / existing accounts: All start with 0 XP, 0 Coins, 0 Streak per Master Prompt Section 2
 export const DEFAULT_DEMO_USERS = [
   {
     id: 'usr_demo_1',
     name: 'SoloSlayer',
     email: 'gamer@gmail.com',
     password: 'SoloGamer2026!',
-    xp: 3450,
-    maxXp: 5000,
-    coins: 850,
-    streak: 7,
+    xp: 0,
+    maxXp: 1000,
+    coins: 0,
+    streak: 0,
     avatar: 'game-controller',
     gamerTag: 'SOLO_SLAYER#2099',
     badge: 'Pro Slayer',
@@ -28,10 +28,10 @@ export const DEFAULT_DEMO_USERS = [
     name: 'CyberKnight',
     email: 'player1@pixo.gg',
     password: 'SoloGamer2026!',
-    xp: 1200,
-    maxXp: 2500,
-    coins: 450,
-    streak: 3,
+    xp: 0,
+    maxXp: 1000,
+    coins: 0,
+    streak: 0,
     avatar: 'shield',
     gamerTag: 'CYBER_KNIGHT#4040',
     badge: 'Cyber Veteran',
@@ -40,16 +40,16 @@ export const DEFAULT_DEMO_USERS = [
   },
   {
     id: 'usr_demo_3',
-    name: 'CyberKnight',
+    name: 'NeonViper',
     email: 'player1@soloplay.gg',
     password: 'SoloGamer2026!',
-    xp: 1200,
-    maxXp: 2500,
-    coins: 450,
-    streak: 3,
-    avatar: 'shield',
-    gamerTag: 'CYBER_KNIGHT#4040',
-    badge: 'Cyber Veteran',
+    xp: 0,
+    maxXp: 1000,
+    coins: 0,
+    streak: 0,
+    avatar: 'flash',
+    gamerTag: 'NEON_VIPER#7070',
+    badge: 'Speed Demon',
     profilePicture: null,
     createdAt: '2026-02-01T00:00:00.000Z',
   },
@@ -205,10 +205,10 @@ export const AuthService = {
       email: normalizedEmail,
       gamerTag: safeTag,
       password: password,
-      xp: 150,
-      maxXp: 5000,
-      coins: 200,
-      streak: 1,
+      xp: 0,
+      maxXp: 1000,
+      coins: 0,
+      streak: 0,
       avatar: 'flash',
       badge: 'Novice Adventurer',
       profilePicture: null,
@@ -333,6 +333,26 @@ export const AuthService = {
     await this.setSession(updatedUser);
 
     return updatedUser;
+  },
+
+  /**
+   * Atomically updates user XP and Coins balances
+   */
+  async updateUserBalances(userId, { xpDelta = 0, coinsDelta = 0 }) {
+    if (!userId) throw new Error('Unauthorized');
+    const user = (await this.findUserById(userId)) || (await this.getActiveSession());
+    if (!user) throw new Error('User record not found.');
+
+    const currentXp = typeof user.xp === 'number' ? user.xp : 0;
+    const currentCoins = typeof user.coins === 'number' ? user.coins : 0;
+
+    const newXp = Math.max(0, currentXp + xpDelta);
+    const newCoins = Math.max(0, currentCoins + coinsDelta);
+
+    return await this.updateUserProfile(userId, {
+      xp: newXp,
+      coins: newCoins,
+    });
   },
 
   /**

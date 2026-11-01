@@ -91,12 +91,12 @@ export const GameSessionRunnerModal = ({
     setIsProcessing(true);
 
     try {
-      const xpReward = game.id?.startsWith('q') ? 250 : 350;
+      const selectedDifficulty = game.difficulty || 1;
       const res = await GamingActivityService.completeSession(user.id, activeSession.id, {
+        difficulty: selectedDifficulty,
         score: Math.max(8500, sessionScore + 5000),
         durationSeconds: Math.max(15, elapsedSeconds),
         result: comboHits > 5 ? 'Victory - S Rank Flawless' : 'Victory - Mission Cleared',
-        xpAwarded: xpReward,
         achievements: [
           'Solo Challenger Cleared',
           comboHits > 5 ? 'Combo Master x10' : 'Campaign Milestone',
@@ -104,15 +104,10 @@ export const GameSessionRunnerModal = ({
         personalBest: true,
       });
 
-      // Award XP to user profile
-      if (addXp) {
-        await addXp(xpReward);
-      }
-
       setNotification({
         type: 'success',
-        title: 'MISSION COMPLETE! 🏆',
-        message: `+${xpReward} XP awarded! Qualifying daily streak updated.`,
+        title: 'VICTORY! 🏆',
+        message: `+${res.xpAwarded} XP  •  +${res.coinsAwarded} COINS awarded! Daily streak updated.`,
       });
 
       if (onSessionUpdated) onSessionUpdated();

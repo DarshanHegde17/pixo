@@ -21,6 +21,7 @@ import { ProfileScreen } from './ProfileScreen';
 import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunnerModal';
 import { TargetNumberGameModal } from '../components/gameplay/TargetNumberGameModal';
 import { RestoreStreakModal } from '../components/profile/RestoreStreakModal';
+import { CoinStoreScreen } from './CoinStoreScreen';
 import { LeftChatPanel, RightChatPanel } from '../components/chat';
 import { GamingActivityService } from '../services/gamingActivityService';
 import { AuthService } from '../services/authService';
@@ -181,7 +182,7 @@ const INITIAL_DAILY_QUESTS = [
     desc: 'Score over 15,000 points in Neon Runner: 2099',
     reward: '+300 XP',
     rewardXp: 300,
-    current: 15000,
+    current: 0,
     target: 15000,
     claimed: false,
     icon: 'trophy-outline',
@@ -192,7 +193,7 @@ const INITIAL_DAILY_QUESTS = [
     desc: 'Complete 3 single-player dungeon runs in Shadow Blade',
     reward: '+200 XP',
     rewardXp: 200,
-    current: 2,
+    current: 0,
     target: 3,
     claimed: false,
     icon: 'flame-outline',
@@ -203,9 +204,9 @@ const INITIAL_DAILY_QUESTS = [
     desc: 'Execute 50 critical hits in any campaign mission',
     reward: '+150 XP',
     rewardXp: 150,
-    current: 50,
+    current: 0,
     target: 50,
-    claimed: true,
+    claimed: false,
     icon: 'shield-checkmark-outline',
   },
 ];
@@ -245,15 +246,11 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   } = useAuth();
 
   // Dynamic user stats state with real session persistence
-  const [userXp, setUserXp] = useState(user?.xp ?? 3450);
-  const [userMaxXp, setUserMaxXp] = useState(user?.maxXp ?? 5000);
-  const [userCoins, setUserCoins] = useState(user?.coins ?? 850);
-  const [userStreak, setUserStreak] = useState(streakState?.currentStreak ?? (user?.streak ?? 7));
+  const [userXp, setUserXp] = useState(user?.xp ?? 0);
+  const [userCoins, setUserCoins] = useState(user?.coins ?? 0);
+  const [userStreak, setUserStreak] = useState(streakState?.currentStreak ?? (user?.streak ?? 0));
   const [isRestoreModalOpen, setIsRestoreModalOpen] = useState(false);
-
-  // Daily 20 XP Claim states
-  const [daily20XpClaimed, setDaily20XpClaimed] = useState(false);
-  const [claimToastMessage, setClaimToastMessage] = useState(null);
+  const [recentTransactions, setRecentTransactions] = useState([]);
 
   // Filter & Search states
   const [selectedCategory, setSelectedCategory] = useState('all');
@@ -261,13 +258,27 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [isSearchFocused, setIsSearchFocused] = useState(false);
 
   // Interaction states
-  const [streakClaimed, setStreakClaimed] = useState(false);
   const [selectedGameModal, setSelectedGameModal] = useState(null);
   const [activeTab, setActiveTab] = useState('home');
   const [quests, setQuests] = useState(INITIAL_DAILY_QUESTS);
   const [liveSessionGame, setLiveSessionGame] = useState(null);
   const [isTargetGameOpen, setIsTargetGameOpen] = useState(false);
   const [hasActiveTargetSession, setHasActiveTargetSession] = useState(false);
+
+  // Load verified user reward transactions
+  const loadRecentTransactions = async () => {
+    if (!user?.id) return;
+    try {
+      const txs = await GamingActivityService.getTransactions(user.id);
+      setRecentTransactions(txs || []);
+    } catch (e) {
+      console.warn('Error loading recent transactions:', e);
+    }
+  };
+
+  useEffect(() => {
+    loadRecentTransactions();
+  }, [user?.id]);
 
   // Check for unfinished active 30-second game on app launch / mount
   useEffect(() => {
@@ -318,13 +329,11 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [activeMobileChat, setActiveMobileChat] = useState(null); // null | 'left' | 'right'
 
   const playerName = user?.name || 'SoloSlayer';
-  const xpPercent = `${Math.min(100, Math.round((userXp / userMaxXp) * 100))}%`;
 
   // Sync state when user session or streak updates
   useEffect(() => {
     if (user) {
       if (typeof user.xp === 'number') setUserXp(user.xp);
-      if (typeof user.maxXp === 'number') setUserMaxXp(user.maxXp);
       if (typeof user.coins === 'number') setUserCoins(user.coins);
       if (typeof user.streak === 'number' && !streakState) setUserStreak(user.streak);
     }
@@ -336,89 +345,20 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     }
   }, [streakState]);
 
-  // Derived streak variables
+  // Derived streak variables (COINS ONLY at 100 Coins per missed day)
   const isStreakBroken = streakState?.streakStatus === 'broken' || (streakState?.missedDays > 0 && userStreak === 0);
   const missedDays = Math.max(1, streakState?.missedDays || 1);
-  const previousStreak = streakState?.previousStreak || (userStreak > 0 ? userStreak : 7);
-  const restorationCost = streakState?.restorationCost || missedDays * 1000;
-  const canRestoreWithXp = userXp >= restorationCost;
+  const previousStreak = streakState?.previousStreak || (userStreak > 0 ? userStreak : 0);
+  const restorationCostCoins = missedDays * 100;
+  const hasEnoughCoins = userCoins >= restorationCostCoins;
 
-  // Check if daily 20 XP was already collected today
-  useEffect(() => {
-    const checkClaimStatus = async () => {
-      if (user?.id) {
-        try {
-          const isClaimed = await AuthService.checkDailyClaimStatus(user.id);
-          setDaily20XpClaimed(!!isClaimed);
-        } catch (e) {
-          console.warn('Error checking daily claim status:', e);
-        }
-      }
-    };
-    checkClaimStatus();
-  }, [user?.id]);
-
-  // Claim Daily 20 XP Handler
-  const handleClaimDaily20Xp = async () => {
-    if (daily20XpClaimed) return;
-    const bonusXp = 20;
-    const bonusCoins = 10;
-    const updatedXp = userXp + bonusXp;
-    const updatedCoins = userCoins + bonusCoins;
-
-    setUserXp(updatedXp);
-    setUserCoins(updatedCoins);
-    setDaily20XpClaimed(true);
-
-    // Persist via AuthContext / AuthService
-    if (claimDailyReward && user?.id) {
-      try {
-        await claimDailyReward(bonusXp, bonusCoins);
-      } catch (e) {
-        console.warn('Error claiming daily reward:', e);
-      }
-    } else if (addXp) {
-      await addXp(bonusXp);
-    }
-
-    setClaimToastMessage(`🎉 +20 XP Claimed! Total XP: ${updatedXp.toLocaleString()} XP`);
-    setTimeout(() => setClaimToastMessage(null), 4000);
-
-    Alert.alert(
-      '🎁 +20 XP Daily Bonus Claimed!',
-      `Success! +20 XP and +10 Coins have been added to your account.\n\nTotal XP: ${updatedXp.toLocaleString()} XP\nCoins: ${updatedCoins.toLocaleString()}\nDaily Streak: ${userStreak} Days Active!`
-    );
+  // Refresh data after transactions (game completions, exchanges, restorations)
+  const handleTransactionsChanged = async () => {
+    if (refreshStreak) await refreshStreak();
+    await loadRecentTransactions();
   };
 
-  // Reset Daily Claim (Useful for Demo / Testing)
-  const handleResetDaily20Xp = async () => {
-    if (user?.id) {
-      try {
-        await AuthService.resetDailyClaimStatus(user.id);
-      } catch (e) {
-        console.warn('Error resetting daily claim:', e);
-      }
-    }
-    setDaily20XpClaimed(false);
-    Alert.alert('Daily Claim Reset', 'Daily claim has been reset. You can now claim +20 XP again!');
-  };
-
-  // Claim Daily Streak (+150 XP)
-  const handleClaimStreak = () => {
-    if (!streakClaimed) {
-      setStreakClaimed(true);
-      const updatedXp = userXp + 150;
-      setUserXp(updatedXp);
-      if (addXp) addXp(150);
-
-      Alert.alert(
-        '🔥 Daily Solo Streak Claimed!',
-        '+150 XP added to your Season Pass progression! Keep your streak active tomorrow.'
-      );
-    }
-  };
-
-  // Claim Quest Reward
+  // Claim Quest Reward (Only for verified in-game progress)
   const handleClaimQuest = async (questId, rewardXp) => {
     setQuests((prev) =>
       prev.map((q) => (q.id === questId ? { ...q, claimed: true } : q))
@@ -429,7 +369,6 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     setUserXp(updatedXp);
     if (addXp) addXp(bonus);
 
-    // Record verified quest completion in GamingActivityService
     if (user?.id) {
       try {
         const qObj = quests.find((q) => q.id === questId);
@@ -446,6 +385,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           xpAwarded: bonus,
           achievements: ['Daily Solo Finisher'],
         });
+        await handleTransactionsChanged();
       } catch (err) {
         console.warn('Failed to record quest completion:', err);
       }
@@ -653,8 +593,12 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                   style={styles.statChipXp}
                   onPress={() =>
                     Alert.alert(
-                      '⚡ Player XP Progress',
-                      `Current XP: ${userXp.toLocaleString()} / ${userMaxXp.toLocaleString()} XP\nSeason Progress: ${xpPercent}\n\nClaim your Daily 20 XP below to boost your rank!`
+                      '⚡ Player XP Balance',
+                      `Current XP: ${userXp.toLocaleString()} XP\n\nEarn XP by winning games. You can exchange your XP for Coins in the Coin Store!`,
+                      [
+                        { text: 'Close', style: 'cancel' },
+                        { text: 'Open Coin Store', onPress: () => setActiveTab('store') },
+                      ]
                     )
                   }
                   activeOpacity={0.8}
@@ -678,12 +622,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 {/* 3. COIN */}
                 <TouchableOpacity
                   style={styles.statChipCoin}
-                  onPress={() =>
-                    Alert.alert(
-                      '🪙 Coins Balance',
-                      `Coins Balance: ${userCoins.toLocaleString()} Coins\nEarn more coins from missions and daily claims!`
-                    )
-                  }
+                  onPress={() => setActiveTab('store')}
                   activeOpacity={0.8}
                 >
                   <LinearGradient
@@ -711,9 +650,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 onPress={() =>
                   Alert.alert(
                     'Player Hub // Status',
-                    `Player: ${playerName}\nStreak: ${isStreakBroken ? 'Broken' : `${userStreak} Days`}\nXP: ${userXp.toLocaleString()} / ${userMaxXp.toLocaleString()}\nCoins: ${userCoins.toLocaleString()}\nDaily 20 XP: ${
-                      daily20XpClaimed ? 'Claimed ✓' : 'Available Now (+20 XP)'
-                    }`
+                    `Player: ${playerName}\nStreak: ${isStreakBroken ? 'Broken' : `${userStreak} Days`}\nXP: ${userXp.toLocaleString()} XP\nCoins: ${userCoins.toLocaleString()} Coins`
                   )
                 }
                 activeOpacity={0.75}
@@ -809,20 +746,16 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               onNavigateGames={() => setActiveTab('games')}
               onNavigateQuests={() => setActiveTab('quests')}
             />
+          ) : activeTab === 'store' ? (
+            <CoinStoreScreen
+              onNavigateHome={() => setActiveTab('home')}
+            />
           ) : (
             <ScrollView
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.scrollContent}
             >
           <View style={styles.dashboardInner}>
-          {/* Animated Celebration Toast Banner for +20 XP Claim */}
-          {claimToastMessage && (
-            <View style={styles.celebrationToast}>
-              <Ionicons name="sparkles" size={16} color="#39FF14" style={{ marginRight: 8 }} />
-              <Text style={styles.celebrationToastText}>{claimToastMessage}</Text>
-            </View>
-          )}
-
           {/* Brand Taglines Banner */}
           <View style={styles.brandTaglineBar}>
             <View style={styles.brandTaglineDot} />
@@ -838,7 +771,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               colors={
                 isStreakBroken
                   ? ['rgba(255, 69, 58, 0.22)', 'rgba(255, 106, 0, 0.08)', '#0F0808']
-                  : ['rgba(255, 106, 0, 0.20)', 'rgba(57, 255, 20, 0.06)', '#08120A']
+                  : ['rgba(57, 255, 20, 0.16)', 'rgba(0, 229, 255, 0.06)', '#08120A']
               }
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
@@ -848,14 +781,14 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 <View style={styles.mainStreakLeftCol}>
                   <View style={[styles.mainStreakFireBadge, isStreakBroken && styles.mainStreakFireBadgeBroken]}>
                     <Ionicons
-                      name="flame"
+                      name={isStreakBroken ? 'alert-circle' : 'flame'}
                       size={26}
                       color={isStreakBroken ? '#FF453A' : '#FF6A00'}
                     />
                   </View>
                   <View style={styles.mainStreakTitleWrap}>
                     <Text style={[styles.mainStreakHeading, isStreakBroken && styles.mainStreakHeadingBroken]}>
-                      {isStreakBroken ? 'STREAK BROKEN' : `${userStreak} DAYS STREAK`}
+                      {isStreakBroken ? 'STREAK BROKEN' : `${userStreak} DAY${userStreak === 1 ? '' : 'S'} STREAK ACTIVE`}
                     </Text>
                     <Text style={styles.mainStreakDesc}>
                       {isStreakBroken
@@ -865,12 +798,12 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                   </View>
                 </View>
 
-                {/* Available XP Balance */}
+                {/* Available Coins Balance */}
                 <View style={styles.mainStreakXpWrap}>
-                  <Text style={styles.mainStreakXpLabel}>AVAILABLE BALANCE</Text>
+                  <Text style={styles.mainStreakXpLabel}>COIN BALANCE</Text>
                   <View style={styles.mainStreakXpValueRow}>
-                    <Ionicons name="flash" size={14} color="#00E5FF" style={{ marginRight: 4 }} />
-                    <Text style={styles.mainStreakXpValueText}>{userXp.toLocaleString()} XP</Text>
+                    <Ionicons name="cash" size={14} color="#FFD700" style={{ marginRight: 4 }} />
+                    <Text style={styles.mainStreakXpValueText}>{userCoins.toLocaleString()} Coins</Text>
                   </View>
                 </View>
               </View>
@@ -882,15 +815,15 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                     <TouchableOpacity
                       style={[
                         styles.restoreStreakButton,
-                        !canRestoreWithXp && styles.restoreStreakButtonDisabled,
+                        !hasEnoughCoins && styles.restoreStreakButtonDisabled,
                       ]}
                       onPress={() => setIsRestoreModalOpen(true)}
                       activeOpacity={0.85}
                     >
                       <LinearGradient
                         colors={
-                          canRestoreWithXp
-                            ? ['#FF6A00', '#FF3B30']
+                          hasEnoughCoins
+                            ? ['#FFD700', '#FF6A00']
                             : ['#2E1C1A', '#1C100E']
                         }
                         start={{ x: 0, y: 0 }}
@@ -900,25 +833,36 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                         <Ionicons
                           name="refresh-circle"
                           size={18}
-                          color={canRestoreWithXp ? '#FFFFFF' : '#888888'}
+                          color={hasEnoughCoins ? '#050705' : '#888888'}
                           style={{ marginRight: 8 }}
                         />
                         <Text
                           style={[
                             styles.restoreStreakButtonText,
-                            !canRestoreWithXp && styles.restoreStreakButtonTextDisabled,
+                            hasEnoughCoins && { color: '#050705' },
+                            !hasEnoughCoins && styles.restoreStreakButtonTextDisabled,
                           ]}
                         >
-                          RESTORE STREAK – {restorationCost.toLocaleString()} XP
+                          RESTORE STREAK – {restorationCostCoins.toLocaleString()} COINS
                         </Text>
                       </LinearGradient>
                     </TouchableOpacity>
 
-                    {!canRestoreWithXp && (
-                      <Text style={styles.insufficientXpNotice}>
-                        Not enough XP! Earn more XP to restore your streak.
-                      </Text>
-                    )}
+                    {!hasEnoughCoins ? (
+                      <View style={styles.insufficientCoinsRow}>
+                        <Text style={styles.insufficientXpNotice}>
+                          Not Enough Coins! Win more games or exchange your XP for Coins.
+                        </Text>
+                        <TouchableOpacity
+                          style={styles.exchangeShortcutBtn}
+                          onPress={() => setActiveTab('store')}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons name="cash-outline" size={14} color="#FFD700" style={{ marginRight: 4 }} />
+                          <Text style={styles.exchangeShortcutText}>GO TO COIN STORE ›</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : null}
                   </View>
                 ) : (
                   <View style={styles.activeStreakInfoRow}>
@@ -945,75 +889,49 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                     </Text>
                   </View>
                 )}
-
-                {/* Developer Testing Controls */}
-                <View style={styles.streakDevControls}>
-                  {isStreakBroken ? (
-                    <TouchableOpacity
-                      style={styles.streakDevBtn}
-                      onPress={async () => {
-                        if (addXp) await addXp(1000);
-                        Alert.alert('+1,000 XP Added', 'Added 1,000 XP for testing streak restoration.');
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.streakDevBtnText}>+1,000 XP (Test)</Text>
-                    </TouchableOpacity>
-                  ) : (
-                    <TouchableOpacity
-                      style={styles.streakDevBtn}
-                      onPress={async () => {
-                        if (simulateMissedDays) {
-                          await simulateMissedDays(1);
-                        }
-                      }}
-                      activeOpacity={0.7}
-                    >
-                      <Text style={styles.streakDevBtnText}>Break Streak (Test)</Text>
-                    </TouchableOpacity>
-                  )}
-                </View>
               </View>
             </LinearGradient>
           </View>
 
           {/* ========================================================= */}
-          {/* 5. XP PROGRESS — GAMING HUD                              */}
+          {/* QUICK ACTIONS ROW: [PLAY GAME] & [COIN STORE]             */}
           {/* ========================================================= */}
-          <View style={styles.xpCard}>
-            <View style={styles.xpHeader}>
-              <View style={styles.xpTitleWrap}>
-                <Ionicons name="flash" size={14} color={colors.primary} style={{ marginRight: 6 }} />
-                <Text style={styles.xpHeading}>SEASON PASS // PLAYER PROGRESSION</Text>
-              </View>
-              <Text style={styles.xpNumbers}>
-                {userXp.toLocaleString()} / {userMaxXp.toLocaleString()} XP
-              </Text>
-            </View>
-
-            <Text style={styles.xpSupportingText}>
-              Every mission moves you forward.
-            </Text>
-
-            {/* Futuristic Progress Track */}
-            <View style={styles.xpTrack}>
+          <View style={styles.quickActionsRow}>
+            <TouchableOpacity
+              style={styles.quickActionPlayBtn}
+              onPress={() => setIsTargetGameOpen(true)}
+              activeOpacity={0.85}
+            >
               <LinearGradient
-                colors={['#00E5FF', '#39FF14']}
+                colors={['#39FF14', '#00E5FF']}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
-                style={[styles.xpFill, { width: xpPercent }]}
-              />
-              <View style={[styles.xpLeadingSpark, { left: xpPercent }]} />
-            </View>
+                style={styles.quickActionBtnGradient}
+              >
+                <Ionicons name="game-controller" size={18} color="#050705" style={{ marginRight: 8 }} />
+                <Text style={styles.quickActionPlayText}>PLAY GAME</Text>
+              </LinearGradient>
+            </TouchableOpacity>
 
-            <View style={styles.xpFooterRow}>
-              <Text style={styles.xpPercentageText}>{xpPercent} Completed</Text>
-              <Text style={styles.xpNextTierText}>{Math.max(0, userMaxXp - userXp).toLocaleString()} XP to Next Milestone</Text>
-            </View>
+            <TouchableOpacity
+              style={styles.quickActionStoreBtn}
+              onPress={() => setActiveTab('store')}
+              activeOpacity={0.85}
+            >
+              <LinearGradient
+                colors={['#FFD700', '#FF8C00']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 0 }}
+                style={styles.quickActionBtnGradient}
+              >
+                <Ionicons name="cash" size={18} color="#050705" style={{ marginRight: 8 }} />
+                <Text style={styles.quickActionStoreText}>COIN STORE</Text>
+              </LinearGradient>
+            </TouchableOpacity>
           </View>
 
           {/* ========================================================= */}
-          {/* 6. GAME SEARCH — FUTURISTIC COMMAND BAR                  */}
+          {/* GAME SEARCH — FUTURISTIC COMMAND BAR                     */}
           {/* ========================================================= */}
           <View
             style={[
@@ -1047,92 +965,80 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           </View>
 
           {/* ========================================================= */}
-          {/* 7. DAILY 20 XP REWARD — CLAIM CARD                       */}
+          {/* RECENT REWARDS & TRANSACTIONS — AUDIT & ECONOMY LOG       */}
           {/* ========================================================= */}
-          <View style={styles.dailyClaimCard}>
-            <LinearGradient
-              colors={['rgba(255, 106, 0, 0.22)', 'rgba(57, 255, 20, 0.08)', 'rgba(9, 17, 11, 0.96)']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={styles.dailyClaimGradient}
-            >
-              {/* Daily Claim Icon Badge with Glow */}
-              <View style={styles.dailyClaimIconWrap}>
-                <Ionicons name="gift" size={24} color="#FFD700" />
+          <View style={styles.historyCard}>
+            <View style={styles.historyHeader}>
+              <View style={styles.historyTitleWrap}>
+                <Ionicons name="receipt-outline" size={16} color={colors.primary} style={{ marginRight: 6 }} />
+                <Text style={styles.historyHeading}>RECENT REWARDS & TRANSACTIONS</Text>
               </View>
+              <View style={styles.historyBadge}>
+                <Text style={styles.historyBadgeText}>{recentTransactions.length} RECORDED</Text>
+              </View>
+            </View>
 
-              <View style={styles.dailyClaimContent}>
-                <View style={styles.dailyClaimTitleRow}>
-                  <Text style={styles.dailyClaimTitle}>🎁 DAILY XP REWARD</Text>
-                  <View style={styles.dailyClaimAmountTag}>
-                    <Ionicons name="flash" size={11} color="#050705" />
-                    <Text style={styles.dailyClaimAmountText}>+20 XP</Text>
-                  </View>
-                </View>
-                <Text style={styles.dailyClaimSubtitle}>
-                  {daily20XpClaimed
-                    ? '✓ Daily 20 XP collected! Next reward available tomorrow.'
-                    : 'Claim your daily 20 XP reward to advance your player tier & streak!'}
+            {recentTransactions.length === 0 ? (
+              <View style={styles.emptyHistoryWrap}>
+                <Ionicons name="trophy-outline" size={26} color="#2A4030" style={{ marginBottom: 6 }} />
+                <Text style={styles.emptyHistoryTitle}>No Reward Transactions Yet</Text>
+                <Text style={styles.emptyHistorySubtitle}>
+                  Win your first game or exchange XP in the Coin Store to earn verified rewards!
                 </Text>
-                <View style={styles.dailyClaimMetaRow}>
-                  <View style={styles.dailyClaimMetaTag}>
-                    <Text style={styles.dailyClaimMetaTagText}>🔥 {userStreak}-DAY STREAK ACTIVE</Text>
-                  </View>
-                  <View style={[styles.dailyClaimMetaTag, styles.dailyClaimMetaTagTier]}>
-                    <Text style={styles.dailyClaimMetaTagTierText}>⚡ {userXp.toLocaleString()} XP EARNED</Text>
-                  </View>
-                </View>
               </View>
+            ) : (
+              <View style={styles.historyList}>
+                {recentTransactions.slice(0, 5).map((tx) => {
+                  const isGameWin = tx.transactionType === 'GAME_WIN';
+                  const isExchange = tx.transactionType === 'XP_TO_COIN_EXCHANGE';
+                  const isRestore = tx.transactionType === 'STREAK_RESTORATION';
 
-              {/* Claim Button */}
-              <View style={styles.dailyClaimActionCol}>
-                <TouchableOpacity
-                  style={[
-                    styles.dailyClaimBtn,
-                    daily20XpClaimed && styles.dailyClaimBtnClaimed,
-                  ]}
-                  onPress={handleClaimDaily20Xp}
-                  disabled={daily20XpClaimed}
-                  activeOpacity={0.8}
-                >
-                  <LinearGradient
-                    colors={
-                      daily20XpClaimed
-                        ? ['#1A241D', '#121914']
-                        : ['#39FF14', '#00E5FF']
-                    }
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.dailyClaimBtnGradient}
-                  >
-                    <Ionicons
-                      name={daily20XpClaimed ? 'checkmark-circle' : 'flash'}
-                      size={15}
-                      color={daily20XpClaimed ? '#39FF14' : '#050705'}
-                      style={{ marginRight: 6 }}
-                    />
-                    <Text
-                      style={[
-                        styles.dailyClaimBtnText,
-                        daily20XpClaimed && styles.dailyClaimBtnTextClaimed,
-                      ]}
-                    >
-                      {daily20XpClaimed ? '20 XP CLAIMED ✓' : 'CLAIM +20 XP'}
-                    </Text>
-                  </LinearGradient>
-                </TouchableOpacity>
+                  const iconName = isGameWin ? 'trophy' : isExchange ? 'swap-horizontal' : 'flame';
+                  const iconColor = isGameWin ? '#39FF14' : isExchange ? '#FFD700' : '#FF6A00';
+                  const title = isGameWin
+                    ? `Game Victory • Level ${tx.gameDifficulty || 1}`
+                    : isExchange
+                    ? 'XP to Coin Exchange'
+                    : 'Streak Restoration';
 
-                {daily20XpClaimed && (
-                  <TouchableOpacity
-                    onPress={handleResetDaily20Xp}
-                    style={styles.resetClaimBtn}
-                    activeOpacity={0.7}
-                  >
-                    <Text style={styles.resetClaimText}>↺ Reset Claim (Test)</Text>
-                  </TouchableOpacity>
-                )}
+                  const dateStr = tx.transactionDate ? new Date(tx.transactionDate).toLocaleDateString() : 'Today';
+
+                  return (
+                    <View key={tx.id || `${tx.transactionType}_${tx.transactionDate}`} style={styles.historyItem}>
+                      <View style={[styles.historyIconWrap, { borderColor: `${iconColor}40` }]}>
+                        <Ionicons name={iconName} size={15} color={iconColor} />
+                      </View>
+
+                      <View style={styles.historyItemContent}>
+                        <Text style={styles.historyItemTitle}>{title}</Text>
+                        <Text style={styles.historyItemDate}>{dateStr} • Status: {tx.transactionStatus || 'COMPLETED'}</Text>
+                      </View>
+
+                      <View style={styles.historyDeltas}>
+                        {isGameWin && (
+                          <View style={styles.historyBadgeRow}>
+                            <Text style={styles.historyDeltaGreen}>+{tx.xpAmount} XP</Text>
+                            <Text style={styles.historyDeltaGold}>+{tx.coinAmount} Coins</Text>
+                          </View>
+                        )}
+                        {isExchange && (
+                          <View style={styles.historyBadgeRow}>
+                            <Text style={styles.historyDeltaRed}>-{tx.xpAmount} XP</Text>
+                            <Text style={styles.historyDeltaGold}>+{tx.coinAmount} Coins</Text>
+                          </View>
+                        )}
+                        {isRestore && (
+                          <View style={styles.historyBadgeRow}>
+                            <Text style={styles.historyDeltaRed}>-{tx.coinAmount} Coins</Text>
+                            <Text style={styles.historyDeltaOrange}>Restored</Text>
+                          </View>
+                        )}
+                      </View>
+                    </View>
+                  );
+                })}
               </View>
-            </LinearGradient>
+            )}
           </View>
 
           {/* ========================================================= */}
@@ -1607,6 +1513,27 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 </Text>
               </TouchableOpacity>
 
+              {/* 3. COIN STORE TAB */}
+              <TouchableOpacity
+                style={[styles.navItem, activeTab === 'store' && styles.navItemActive]}
+                onPress={() => setActiveTab('store')}
+                activeOpacity={0.75}
+              >
+                <Ionicons
+                  name={activeTab === 'store' ? 'cash' : 'cash-outline'}
+                  size={20}
+                  color={activeTab === 'store' ? '#FFD700' : colors.textSecondary}
+                />
+                <Text
+                  style={[
+                    styles.navText,
+                    activeTab === 'store' && { color: '#FFD700', fontWeight: '900' },
+                  ]}
+                >
+                  Store
+                </Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 style={[styles.navItem, activeTab === 'quests' && styles.navItemActive]}
                 onPress={() => {
@@ -1695,10 +1622,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           visible={!!liveSessionGame}
           game={liveSessionGame}
           onClose={() => setLiveSessionGame(null)}
-          onSessionUpdated={async () => {
-            if (refreshStreak) await refreshStreak();
-            if (user?.xp) setUserXp(user.xp);
-          }}
+          onSessionUpdated={handleTransactionsChanged}
         />
       )}
 
@@ -1706,25 +1630,28 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       <TargetNumberGameModal
         visible={isTargetGameOpen}
         onClose={() => setIsTargetGameOpen(false)}
-        onSessionComplete={async () => {
-          if (refreshStreak) await refreshStreak();
-          if (user?.xp) setUserXp(user.xp);
-        }}
+        onSessionComplete={handleTransactionsChanged}
       />
 
-      {/* PIXO Restore Streak Confirmation Modal */}
+      {/* PIXO Restore Streak Confirmation Modal (COINS ONLY) */}
       <RestoreStreakModal
         visible={isRestoreModalOpen}
         onClose={() => setIsRestoreModalOpen(false)}
         streakState={streakState}
+        availableCoins={userCoins}
         availableXp={userXp}
+        onOpenCoinStore={() => {
+          setIsRestoreModalOpen(false);
+          setActiveTab('store');
+        }}
         onConfirmRestore={async () => {
           if (restoreStreak) {
             const res = await restoreStreak();
             if (res && res.success) {
+              await handleTransactionsChanged();
               Alert.alert(
                 '🔥 Streak Restored!',
-                `Your ${res.restoredStreak}-day streak has been restored!\n\n1,000 XP deducted.\nRemaining XP: ${res.remainingXp.toLocaleString()} XP.`
+                `Your ${res.restoredStreak}-day streak has been restored!\n\n${res.costInCoins} Coins deducted.\nRemaining Coins: ${(res.remainingCoins ?? userCoins).toLocaleString()} Coins.`
               );
             }
             return res;
@@ -2333,8 +2260,79 @@ const styles = StyleSheet.create({
     fontSize: 11,
     marginLeft: 6,
   },
-  xpCard: {
-    backgroundColor: '#111923',
+  quickActionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: spacing.md,
+  },
+  quickActionPlayBtn: {
+    flex: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web'
+      ? {
+          cursor: 'pointer',
+          boxShadow: '0 4px 16px rgba(57, 255, 20, 0.28)',
+          transition: 'all 0.2s ease',
+        }
+      : {}),
+  },
+  quickActionStoreBtn: {
+    flex: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+    ...(Platform.OS === 'web'
+      ? {
+          cursor: 'pointer',
+          boxShadow: '0 4px 16px rgba(255, 215, 0, 0.28)',
+          transition: 'all 0.2s ease',
+        }
+      : {}),
+  },
+  quickActionBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 13,
+    paddingHorizontal: 16,
+  },
+  quickActionPlayText: {
+    color: '#050705',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  quickActionStoreText: {
+    color: '#050705',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  insufficientCoinsRow: {
+    marginTop: 8,
+    gap: 6,
+  },
+  exchangeShortcutBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255, 215, 0, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.35)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 6,
+    marginTop: 4,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
+  },
+  exchangeShortcutText: {
+    color: '#FFD700',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  historyCard: {
+    backgroundColor: '#0E1610',
     borderRadius: 16,
     padding: spacing.md,
     borderWidth: 1,
@@ -2346,17 +2344,20 @@ const styles = StyleSheet.create({
         }
       : {}),
   },
-  xpHeader: {
+  historyHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: spacing.sm,
+    paddingBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(57, 255, 20, 0.12)',
   },
-  xpTitleWrap: {
+  historyTitleWrap: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  xpHeading: {
+  historyHeading: {
     color: colors.textPrimary,
     fontSize: 12,
     fontWeight: '900',
@@ -2367,49 +2368,101 @@ const styles = StyleSheet.create({
         }
       : {}),
   },
-  xpNumbers: {
+  historyBadge: {
+    backgroundColor: 'rgba(57, 255, 20, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.28)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  historyBadgeText: {
     color: colors.primary,
-    fontSize: 13,
+    fontSize: 10,
     fontWeight: '800',
     letterSpacing: 0.5,
   },
-  xpSupportingText: {
+  emptyHistoryWrap: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 20,
+    paddingHorizontal: 16,
+  },
+  emptyHistoryTitle: {
+    color: colors.textPrimary,
+    fontSize: 13,
+    fontWeight: '800',
+    marginBottom: 4,
+  },
+  emptyHistorySubtitle: {
     color: colors.textSecondary,
     fontSize: 11,
-    marginBottom: 8,
+    textAlign: 'center',
+    lineHeight: 15,
+    maxWidth: 320,
   },
-  xpTrack: {
-    height: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderRadius: 4,
-    overflow: 'hidden',
-    position: 'relative',
+  historyList: {
+    gap: 8,
   },
-  xpFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  xpLeadingSpark: {
-    position: 'absolute',
-    top: 0,
-    width: 4,
-    height: '100%',
-    backgroundColor: colors.orangeWarm,
-  },
-  xpFooterRow: {
+  historyItem: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 6,
+    alignItems: 'center',
+    backgroundColor: '#121D15',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
   },
-  xpPercentageText: {
-    color: colors.textSecondary,
-    fontSize: 11,
-    fontWeight: '600',
+  historyIconWrap: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
   },
-  xpNextTierText: {
-    color: colors.orangeWarm,
+  historyItemContent: {
+    flex: 1,
+  },
+  historyItemTitle: {
+    color: colors.textPrimary,
+    fontSize: 12.5,
+    fontWeight: '800',
+  },
+  historyItemDate: {
+    color: colors.textTertiary,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  historyDeltas: {
+    alignItems: 'flex-end',
+  },
+  historyBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  historyDeltaGreen: {
+    color: '#39FF14',
     fontSize: 11,
-    fontWeight: '700',
+    fontWeight: '800',
+  },
+  historyDeltaGold: {
+    color: '#FFD700',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  historyDeltaRed: {
+    color: '#FF6961',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  historyDeltaOrange: {
+    color: '#FF8C00',
+    fontSize: 11,
+    fontWeight: '800',
   },
   searchContainer: {
     flexDirection: 'row',
@@ -2449,185 +2502,6 @@ const styles = StyleSheet.create({
           fontFamily: "'Inter', sans-serif",
         }
       : {}),
-  },
-  celebrationToast: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(9, 28, 14, 0.95)',
-    borderWidth: 1.5,
-    borderColor: colors.primary,
-    borderRadius: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 14,
-    marginBottom: spacing.sm,
-    ...(Platform.OS === 'web'
-      ? {
-          boxShadow: '0 0 18px rgba(57, 255, 20, 0.35)',
-          animation: 'fadeIn 0.3s ease',
-        }
-      : {}),
-  },
-  celebrationToastText: {
-    color: '#FFFFFF',
-    fontSize: 13,
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
-  dailyClaimCard: {
-    borderRadius: 16,
-    overflow: 'hidden',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 106, 0, 0.45)',
-    marginBottom: spacing.md,
-    backgroundColor: '#0E1610',
-    ...(Platform.OS === 'web'
-      ? {
-          boxShadow: '0 6px 24px rgba(255, 106, 0, 0.16), 0 0 16px rgba(57, 255, 20, 0.08)',
-        }
-      : {}),
-  },
-  dailyClaimGradient: {
-    flexDirection: isMobile ? 'column' : 'row',
-    alignItems: isMobile ? 'flex-start' : 'center',
-    padding: isMobile ? 14 : spacing.md + 2,
-    gap: 12,
-  },
-  dailyClaimIconWrap: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    backgroundColor: 'rgba(255, 215, 0, 0.15)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255, 215, 0, 0.35)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 4,
-    ...(Platform.OS === 'web' ? { boxShadow: '0 0 12px rgba(255, 215, 0, 0.25)' } : {}),
-  },
-  dailyClaimContent: {
-    flex: 1,
-  },
-  dailyClaimTitleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginBottom: 3,
-  },
-  dailyClaimTitle: {
-    color: colors.textPrimary,
-    fontSize: 15,
-    fontWeight: '900',
-    letterSpacing: 0.6,
-    ...(Platform.OS === 'web'
-      ? {
-          fontFamily: "'Space Grotesk', sans-serif",
-        }
-      : {}),
-  },
-  dailyClaimAmountTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.primary,
-    paddingHorizontal: 7,
-    paddingVertical: 2,
-    borderRadius: 6,
-    ...(Platform.OS === 'web' ? { boxShadow: '0 0 8px rgba(57, 255, 20, 0.4)' } : {}),
-  },
-  dailyClaimAmountText: {
-    color: '#050705',
-    fontSize: 10,
-    fontWeight: '900',
-    letterSpacing: 0.5,
-    marginLeft: 3,
-  },
-  dailyClaimSubtitle: {
-    color: colors.textSecondary,
-    fontSize: 12,
-    lineHeight: 16,
-    marginBottom: 6,
-  },
-  dailyClaimMetaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  dailyClaimMetaTag: {
-    backgroundColor: 'rgba(255, 106, 0, 0.14)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 106, 0, 0.3)',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  dailyClaimMetaTagText: {
-    color: colors.orangeWarm,
-    fontSize: 9.5,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  dailyClaimMetaTagTier: {
-    backgroundColor: 'rgba(57, 255, 20, 0.12)',
-    borderColor: 'rgba(57, 255, 20, 0.3)',
-  },
-  dailyClaimMetaTagTierText: {
-    color: colors.primary,
-    fontSize: 9.5,
-    fontWeight: '800',
-    letterSpacing: 0.4,
-  },
-  dailyClaimActionCol: {
-    alignItems: isMobile ? 'stretch' : 'flex-end',
-    width: isMobile ? '100%' : 'auto',
-    gap: 4,
-  },
-  dailyClaimBtn: {
-    borderRadius: 10,
-    overflow: 'hidden',
-    alignSelf: isMobile ? 'stretch' : 'auto',
-    ...(Platform.OS === 'web'
-      ? {
-          cursor: 'pointer',
-          boxShadow: '0 0 16px rgba(57, 255, 20, 0.35)',
-          transition: 'all 0.2s ease',
-        }
-      : {}),
-  },
-  dailyClaimBtnClaimed: {
-    borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.3)',
-    ...(Platform.OS === 'web'
-      ? {
-          boxShadow: 'none',
-        }
-      : {}),
-  },
-  dailyClaimBtnGradient: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-  },
-  dailyClaimBtnText: {
-    color: '#050705',
-    fontSize: 12,
-    fontWeight: '900',
-    letterSpacing: 0.6,
-  },
-  dailyClaimBtnTextClaimed: {
-    color: colors.primary,
-  },
-  resetClaimBtn: {
-    paddingVertical: 3,
-    paddingHorizontal: 6,
-    alignSelf: 'center',
-    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
-  },
-  resetClaimText: {
-    color: colors.textSecondary,
-    fontSize: 10,
-    textDecorationLine: 'underline',
   },
   targetGameBanner: {
     borderRadius: 16,
