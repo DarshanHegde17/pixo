@@ -954,147 +954,6 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           </View>
 
           {/* ========================================================= */}
-          {/* MASTER PROMPT SECTION 5: SEQUENTIAL GAME LEVEL TRACK      */}
-          {/* ========================================================= */}
-          <View style={styles.gameLevelsSection}>
-            <View style={styles.gameLevelsHeaderRow}>
-              <View style={styles.gameLevelsTitleBlock}>
-                <View style={styles.gameLevelsEyebrowRow}>
-                  <Text style={styles.gameLevelsEyebrow}>SPEED MATH DUELS</Text>
-                  <View style={styles.gameLevelsProgressBadge}>
-                    <Ionicons name="shield-checkmark" size={12} color="#39FF14" style={{ marginRight: 4 }} />
-                    <Text style={styles.gameLevelsProgressText}>
-                      Level {unlockedLevel} / 10 Unlocked
-                    </Text>
-                  </View>
-                </View>
-                <Text style={styles.gameLevelsHeading}>Sequential Level Track (Levels 1–10)</Text>
-                <Text style={styles.gameLevelsSubtitle}>
-                  Solve all target math values within 30 seconds. Complete each level sequentially to unlock the next!
-                </Text>
-              </View>
-            </View>
-
-            <View style={styles.gameLevelsGrid}>
-              {gameLevels.map((lvl) => {
-                return (
-                  <View
-                    key={`track_lvl_${lvl.level}`}
-                    style={[
-                      styles.levelCard,
-                      lvl.isCompleted && styles.levelCardCompleted,
-                      lvl.isCurrent && styles.levelCardCurrent,
-                      lvl.isLocked && styles.levelCardLocked,
-                    ]}
-                  >
-                    {/* Top Row: Level Badge & Status Pill */}
-                    <View style={styles.levelCardTopRow}>
-                      <View
-                        style={[
-                          styles.levelNumberTag,
-                          lvl.isCompleted && styles.levelNumberTagCompleted,
-                          lvl.isCurrent && styles.levelNumberTagCurrent,
-                          lvl.isLocked && styles.levelNumberTagLocked,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.levelNumberTagText,
-                            lvl.isCurrent && styles.levelNumberTagTextCurrent,
-                          ]}
-                        >
-                          LEVEL {lvl.level}
-                        </Text>
-                      </View>
-
-                      {lvl.isCompleted ? (
-                        <View style={styles.levelStatusBadgeCompleted}>
-                          <Ionicons name="checkmark-circle" size={14} color="#39FF14" style={{ marginRight: 3 }} />
-                          <Text style={styles.levelStatusTextCompleted}>COMPLETED</Text>
-                        </View>
-                      ) : lvl.isCurrent ? (
-                        <View style={styles.levelStatusBadgeCurrent}>
-                          <Ionicons name="flash" size={14} color="#39FF14" style={{ marginRight: 3 }} />
-                          <Text style={styles.levelStatusTextCurrent}>READY TO PLAY</Text>
-                        </View>
-                      ) : (
-                        <View style={styles.levelStatusBadgeLocked}>
-                          <Ionicons name="lock-closed" size={13} color="#777777" style={{ marginRight: 3 }} />
-                          <Text style={styles.levelStatusTextLocked}>LOCKED</Text>
-                        </View>
-                      )}
-                    </View>
-
-                    {/* Middle Info */}
-                    <View style={styles.levelCardMiddle}>
-                      <Text style={[styles.levelCardName, lvl.isLocked && styles.levelCardNameLocked]}>
-                        {lvl.title}
-                      </Text>
-                      <Text style={styles.levelCardSub}>
-                        {lvl.isLocked ? `Complete Level ${lvl.level - 1} to Unlock` : lvl.subtitle}
-                      </Text>
-
-                      {/* Rewards */}
-                      <View style={styles.levelRewardPillsRow}>
-                        <View style={styles.levelRewardXpPill}>
-                          <Ionicons name="flash" size={11} color="#00E5FF" style={{ marginRight: 3 }} />
-                          <Text style={styles.levelRewardXpText}>+{lvl.xpReward} XP</Text>
-                        </View>
-                        <View style={styles.levelRewardCoinPill}>
-                          <Ionicons name="cash" size={11} color="#FFD700" style={{ marginRight: 3 }} />
-                          <Text style={styles.levelRewardCoinText}>+{lvl.coinReward} Coins</Text>
-                        </View>
-                        <View style={styles.levelDiffTag}>
-                          <Text style={styles.levelDiffTagText}>{lvl.difficulty}</Text>
-                        </View>
-                      </View>
-                    </View>
-
-                    {/* Bottom Action Button */}
-                    <View style={styles.levelCardBottom}>
-                      {lvl.isLocked ? (
-                        <TouchableOpacity
-                          style={styles.levelLockedBtn}
-                          disabled={true}
-                          activeOpacity={1}
-                        >
-                          <Ionicons name="lock-closed" size={14} color="#777777" style={{ marginRight: 6 }} />
-                          <Text style={styles.levelLockedBtnText}>LOCKED</Text>
-                        </TouchableOpacity>
-                      ) : lvl.isCurrent ? (
-                        <TouchableOpacity
-                          style={styles.levelPlayCurrentBtn}
-                          onPress={() => handlePlayLevel(lvl.level)}
-                          activeOpacity={0.85}
-                        >
-                          <LinearGradient
-                            colors={['#39FF14', '#00E5FF']}
-                            start={{ x: 0, y: 0 }}
-                            end={{ x: 1, y: 0 }}
-                            style={styles.levelPlayCurrentGradient}
-                          >
-                            <Ionicons name="play" size={14} color="#050705" style={{ marginRight: 6 }} />
-                            <Text style={styles.levelPlayCurrentText}>PLAY LEVEL {lvl.level}</Text>
-                          </LinearGradient>
-                        </TouchableOpacity>
-                      ) : (
-                        <TouchableOpacity
-                          style={styles.levelReplayBtn}
-                          onPress={() => handlePlayLevel(lvl.level)}
-                          activeOpacity={0.85}
-                        >
-                          <Ionicons name="refresh" size={14} color="#39FF14" style={{ marginRight: 6 }} />
-                          <Text style={styles.levelReplayText}>REPLAY LEVEL {lvl.level}</Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-
-          {/* ========================================================= */}
           {/* RECENT REWARDS & TRANSACTIONS — AUDIT & ECONOMY LOG       */}
           {/* ========================================================= */}
           <View style={styles.historyCard}>
@@ -3520,10 +3379,12 @@ const styles = StyleSheet.create({
   },
   bottomNavDock: {
     position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 22 : 10,
+    bottom: Platform.OS === 'ios' ? 22 : 12,
     left: isMobile ? 12 : 20,
     right: isMobile ? 12 : 20,
     maxWidth: 480,
+    marginLeft: 'auto',
+    marginRight: 'auto',
     alignSelf: 'center',
     backgroundColor: 'rgba(16, 22, 16, 0.94)',
     borderRadius: 22,

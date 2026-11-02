@@ -11,6 +11,7 @@ const STORAGE_KEYS = {
   TRANSACTIONS_PREFIX: '@pixo_reward_transactions_',
   DAILY_QUESTS_PREFIX: '@pixo_daily_quests_',
   UNLOCKED_LEVEL_PREFIX: '@pixo_game_unlocked_level_',
+  COMPLETED_LEVELS_PREFIX: '@pixo_completed_levels_',
 };
 
 // Concurrency mutex locks
@@ -602,9 +603,13 @@ export const GamingActivityService = {
     // Difficulty calculation (1-10) - Never trust frontend values!
     const rawDiff = verificationDetails.difficulty || session.difficulty || 1;
     const difficultyRewards = getDifficultyRewards(rawDiff);
+    const gameId = session.gameId || verificationDetails.gameId || 'g_target_no';
 
-    const xpAwarded = won ? difficultyRewards.xp : 0;
-    const coinsAwarded = won ? difficultyRewards.coins : 0;
+    // Check if player has already completed this level previously (prevent duplicate rewards)
+    const alreadyCompleted = await this.isLevelAlreadyCompleted(userId, gameId, difficultyRewards.difficulty);
+
+    const xpAwarded = won ? (alreadyCompleted ? 0 : difficultyRewards.xp) : 0;
+    const coinsAwarded = won ? (alreadyCompleted ? 0 : difficultyRewards.coins) : 0;
 
     // Update verified session fields
     const updatedSession = {
@@ -620,6 +625,7 @@ export const GamingActivityService = {
       difficultyLabel: difficultyRewards.label,
       won,
       rewardClaimed: true,
+      alreadyCompleted,
       result: verificationDetails.result || (won ? 'Victory - Mission Cleared' : 'Defeat'),
       achievements: verificationDetails.achievements || ['Solo Finisher'],
       personalBest: verificationDetails.personalBest !== undefined ? verificationDetails.personalBest : won,
@@ -638,7 +644,7 @@ export const GamingActivityService = {
         xpAmount: xpAwarded,
         coinAmount: coinsAwarded,
         gameDifficulty: difficultyRewards.difficulty,
-        gameId: session.gameId || 'game',
+        gameId,
         sessionId: session.id,
         transactionDate: now.toISOString(),
         transactionStatus: 'COMPLETED',
@@ -665,24 +671,25 @@ export const GamingActivityService = {
     }
     const streakInfo = await this.calculateUserStreak(userId);
 
-    // 4. Sequential Level Unlock (Master Prompt Section 5 & 7)
+    // 4. Sequential Level Unlock (per game progress)
     let unlockedLevel = 1;
     if (won) {
-      unlockedLevel = await this.unlockNextLevel(userId, difficultyRewards.difficulty);
+      await this.recordLevelCompletion(userId, gameId, difficultyRewards.difficulty);
+      unlockedLevel = await this.unlockNextLevel(userId, difficultyRewards.difficulty, gameId);
     } else {
-      unlockedLevel = await this.getUserUnlockedLevel(userId);
+      unlockedLevel = await this.getUserUnlockedLevel(userId, gameId);
     }
 
     // 5. Update Daily Quest Progress (Master Prompt Section 4 & 7)
     const questResult = await this.recordQuestActivity(userId, {
       won,
       difficulty: difficultyRewards.difficulty,
-      gameId: session.gameId,
+      gameId,
     });
 
     return {
       success: true,
-      alreadyCompleted: false,
+      alreadyCompleted,
       session: updatedSession,
       won,
       difficulty: difficultyRewards.difficulty,
@@ -693,6 +700,7 @@ export const GamingActivityService = {
       streakInfo,
       streakState,
       unlockedLevel,
+      levelUnlocked: unlockedLevel,
       quests: questResult?.quests,
     };
   },
@@ -1406,43 +1414,89 @@ export const GamingActivityService = {
   },
 
   /**
-   * Retrieves player's current sequentially unlocked game level (1 to 10).
-   * Level 1 is unlocked for every new player; subsequent levels unlock only upon completing previous level.
+   * Retrieves player's current sequentially unlocked game level (1 to 10) for a specific game.
+   * Level 1 is always unlocked by default for every new player; subsequent levels unlock only upon completing previous level.
    */
-  async getUserUnlockedLevel(userId) {
+  async getUserUnlockedLevel(userId, gameId = 'g_target_no') {
     if (!userId) return 1;
-    const key = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}`;
+    const cleanGameId = String(gameId || 'g_target_no').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const key = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}_${cleanGameId}`;
     const stored = await SessionStorage.getItem(key);
     const parsed = parseInt(stored, 10);
-    return isNaN(parsed) || parsed < 1 ? 1 : Math.min(10, parsed);
+    if (isNaN(parsed) || parsed < 1) {
+      // Legacy fallback
+      const legacyKey = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}`;
+      const legacyStored = await SessionStorage.getItem(legacyKey);
+      const legacyParsed = parseInt(legacyStored, 10);
+      if (!isNaN(legacyParsed) && legacyParsed >= 1 && (cleanGameId === 'g_target_no' || cleanGameId === 'default')) {
+        return Math.min(10, legacyParsed);
+      }
+      return 1;
+    }
+    return Math.min(10, parsed);
   },
 
   /**
-   * Unlocks next sequential level after a verified win of the current level.
-   * Master Prompt Section 5:
+   * Unlocks next sequential level after a verified win of the current level for a specific game.
    * Level 1 completed -> unlocks Level 2
    * Level 2 completed -> unlocks Level 3
    * Failed or abandoned games do not unlock.
    */
-  async unlockNextLevel(userId, completedLevel = 1) {
+  async unlockNextLevel(userId, completedLevel = 1, gameId = 'g_target_no') {
     if (!userId) return 1;
-    const current = await this.getUserUnlockedLevel(userId);
+    const cleanGameId = String(gameId || 'g_target_no').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const current = await this.getUserUnlockedLevel(userId, cleanGameId);
     const completed = parseInt(completedLevel, 10) || 1;
     let newLevel = current;
     if (completed >= current && current < 10) {
       newLevel = current + 1;
-      const key = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}`;
+      const key = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}_${cleanGameId}`;
       await SessionStorage.setItem(key, newLevel);
+      if (cleanGameId === 'g_target_no' || cleanGameId === 'default') {
+        const legacyKey = `${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${userId}`;
+        await SessionStorage.setItem(legacyKey, newLevel);
+      }
     }
     return newLevel;
   },
 
   /**
-   * Retrieves all 10 sequential game levels with player's live unlock/completed status
+   * Checks whether a level has already been successfully completed to prevent duplicate rewards.
    */
-  async getGameLevels(userId) {
-    const unlockedLevel = await this.getUserUnlockedLevel(userId);
-    return GAME_LEVELS_CONFIG.map((cfg) => {
+  async isLevelAlreadyCompleted(userId, gameId = 'g_target_no', level = 1) {
+    if (!userId) return false;
+    const cleanGameId = String(gameId || 'g_target_no').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const key = `${STORAGE_KEYS.COMPLETED_LEVELS_PREFIX}${userId}_${cleanGameId}`;
+    const stored = await SessionStorage.getItem(key);
+    if (!Array.isArray(stored)) return false;
+    const lvlNum = parseInt(level, 10) || 1;
+    return stored.includes(lvlNum);
+  },
+
+  /**
+   * Records a level as completed for a specific user and game.
+   */
+  async recordLevelCompletion(userId, gameId = 'g_target_no', level = 1) {
+    if (!userId) return [];
+    const cleanGameId = String(gameId || 'g_target_no').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+    const key = `${STORAGE_KEYS.COMPLETED_LEVELS_PREFIX}${userId}_${cleanGameId}`;
+    const stored = await SessionStorage.getItem(key);
+    const list = Array.isArray(stored) ? stored : [];
+    const lvlNum = parseInt(level, 10) || 1;
+    if (!list.includes(lvlNum)) {
+      list.push(lvlNum);
+      await SessionStorage.setItem(key, list);
+    }
+    return list;
+  },
+
+  /**
+   * Retrieves all sequential game levels with player's live unlock/completed status for a specific game
+   */
+  async getGameLevels(userId, gameId = 'g_target_no', maxLevels = 10) {
+    const unlockedLevel = await this.getUserUnlockedLevel(userId, gameId);
+    const configs = GAME_LEVELS_CONFIG.slice(0, maxLevels);
+    return configs.map((cfg) => {
       const isCompleted = cfg.level < unlockedLevel;
       const isUnlocked = cfg.level <= unlockedLevel;
       const isCurrent = cfg.level === unlockedLevel;
@@ -1454,6 +1508,7 @@ export const GamingActivityService = {
         isCurrent,
         isLocked,
         status: isCompleted ? 'completed' : isUnlocked ? 'unlocked' : 'locked',
+        unlockMessage: cfg.level > 1 ? `Complete Level ${cfg.level - 1} to Unlock` : 'Available to Play',
       };
     });
   },
@@ -1704,6 +1759,7 @@ export const GamingActivityService = {
       await SessionStorage.removeItem(`${STORAGE_KEYS.TRANSACTIONS_PREFIX}${u.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.INITIALIZED_FLAG_PREFIX}${u.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.COMPLETED_LEVELS_PREFIX}${u.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${u.id}`);
     }
 
@@ -1722,6 +1778,7 @@ export const GamingActivityService = {
       await SessionStorage.removeItem(`${STORAGE_KEYS.TRANSACTIONS_PREFIX}${active.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.INITIALIZED_FLAG_PREFIX}${active.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.COMPLETED_LEVELS_PREFIX}${active.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${active.id}`);
     }
   },

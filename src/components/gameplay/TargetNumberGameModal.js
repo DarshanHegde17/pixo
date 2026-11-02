@@ -325,6 +325,19 @@ export const TargetNumberGameModal = ({
   // 2. Start a fresh level with absolute 30-second end timestamp
   const startLevel = useCallback(
     async (lvl, op) => {
+      const opUnlocked = (unlockedLevels && unlockedLevels[op]) || 1;
+      if (lvl > opUnlocked) {
+        Alert.alert(
+          '🔒 Level Locked',
+          `Complete Level ${lvl - 1} first to unlock Level ${lvl}!`
+        );
+        return;
+      }
+      if (!op) {
+        Alert.alert('Select Operator', 'Please select a math operator (+, -, *, %) to begin.');
+        return;
+      }
+
       const config = LEVEL_CONFIGS[lvl] || LEVEL_CONFIGS[1];
       const generated = [];
       for (let i = 0; i < config.totalQuestions; i++) {
@@ -378,7 +391,7 @@ export const TargetNumberGameModal = ({
 
       await GamePersistenceService.saveActiveSession(user?.id, sessionData);
     },
-    [user?.id]
+    [unlockedLevels, user?.id]
   );
 
   // 3. Absolute Ground-Truth Timer Hook (resumes smoothly across foreground/background)
@@ -591,20 +604,14 @@ export const TargetNumberGameModal = ({
           // Unlock next level sequentially in database
           try {
             await GamePersistenceService.unlockNextLevel(user?.id, selectedOperator, currentLevel);
-            await GamingActivityService.unlockNextLevel(user?.id, currentLevel);
+            await GamingActivityService.unlockNextLevel(user?.id, currentLevel, 'g_target_no');
             const freshUnlocked = await GamePersistenceService.getUnlockedLevels(user?.id);
             setUnlockedLevels(freshUnlocked);
           } catch (unlockErr) {
             console.warn('Error unlocking next level:', unlockErr);
           }
 
-          // Award XP and coins to user session
-          const xpEarned = currentLevelConfig.xpReward;
-          if (addXp) {
-            await addXp(xpEarned);
-          }
-
-          // Record session in activity service
+          // Record session in activity service (prevents duplicate rewards if already completed)
           if (user?.id) {
             try {
               const sess = await GamingActivityService.startSession(user.id, {
@@ -613,13 +620,16 @@ export const TargetNumberGameModal = ({
                 category: 'Math Speed Challenge',
                 icon: 'calculator',
               });
-              await GamingActivityService.completeSession(user.id, sess.id, {
+              const compRes = await GamingActivityService.completeSession(user.id, sess.id, {
                 difficulty: currentLevel,
                 score: newScore,
                 durationSeconds: currentLevelConfig.timeLimit - timeLeft,
                 result: `Victory — Level ${currentLevel} Cleared`,
                 achievements: [`Target No. Level ${currentLevel} Winner`],
               });
+              if (compRes && compRes.xpAwarded > 0 && addXp) {
+                await addXp(compRes.xpAwarded);
+              }
             } catch (e) {
               console.warn('Error recording game session:', e);
             }
@@ -725,6 +735,43 @@ export const TargetNumberGameModal = ({
     onClose();
   }, [gameState, onClose, user?.id]);
 
+  // Web: lock background page scrolling when modal is open
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      if (visible) {
+        const origOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+          document.body.style.overflow = origOverflow || '';
+        };
+      }
+    }
+  }, [visible]);
+
+  // Controlled Operator selection
+  const handleSelectOperator = useCallback(
+    (opId) => {
+      setSelectedOperator(opId);
+      const opUnlocked = (unlockedLevels && unlockedLevels[opId]) || 1;
+      if (currentLevel > opUnlocked) {
+        setCurrentLevel(Math.min(10, opUnlocked));
+      }
+    },
+    [unlockedLevels, currentLevel]
+  );
+
+  // Controlled Level selection
+  const handleSelectLevel = useCallback((lvl, isLocked) => {
+    if (isLocked) {
+      Alert.alert(
+        '🔒 Level Locked',
+        `Complete Level ${lvl - 1} first to unlock Level ${lvl}!`
+      );
+      return;
+    }
+    setCurrentLevel(lvl);
+  }, []);
+
   // Keyboard support on Web
   useEffect(() => {
     if (Platform.OS === 'web' && gameState === 'playing' && typeof window !== 'undefined') {
@@ -752,12 +799,24 @@ export const TargetNumberGameModal = ({
       onRequestClose={handleModalClose}
     >
       <View style={styles.modalOverlay}>
-        <View style={[styles.gameCardContainer, isMobile && styles.gameCardMobile]}>
+        {/* Outside Backdrop Touch — closes popup on outside click */}
+        <TouchableOpacity
+          style={styles.modalBackdropTouch}
+          activeOpacity={1}
+          onPress={handleModalClose}
+          accessibilityLabel="Close game popup"
+        />
+
+        {/* Modal Window Card */}
+        <View
+          style={[styles.gameCardContainer, isMobile && styles.gameCardMobile]}
+          onStartShouldSetResponder={() => true}
+        >
           <LinearGradient
             colors={['#0F1E14', '#08110B', '#050A07']}
             style={styles.modalGradient}
           >
-            {/* Top Game Bar */}
+            {/* Top Game Bar — Fixed at top, never scrolls away */}
             <View style={styles.topGameBar}>
               <View style={styles.gameTitleWrap}>
                 <View style={styles.gameIconBadge}>
@@ -773,6 +832,7 @@ export const TargetNumberGameModal = ({
                 style={styles.closeBtn}
                 onPress={handleModalClose}
                 activeOpacity={0.7}
+                accessibilityLabel="Close modal"
               >
                 <Ionicons name="close" size={22} color={colors.textSecondary} />
               </TouchableOpacity>
@@ -780,83 +840,158 @@ export const TargetNumberGameModal = ({
 
             {/* SCREEN 1: SELECT OPERATOR & LEVEL */}
             {gameState === 'select_mode' && (
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.selectModeContent}>
-                <Text style={styles.sectionHeaderTitle}>1. CHOOSE YOUR OPERATOR</Text>
-                <Text style={styles.sectionHeaderSub}>
-                  Select the calculation mode: Addition (+), Subtraction (-), Multiplication (*), or Modulus (%)
-                </Text>
-
-                <View style={styles.operatorGrid}>
-                  {OPERATORS.map((op) => {
-                    const isSelected = selectedOperator === op.id;
-                    return (
-                      <TouchableOpacity
-                        key={op.id}
-                        style={[
-                          styles.operatorCard,
-                          isSelected && { borderColor: op.color, backgroundColor: 'rgba(57, 255, 20, 0.12)' },
-                        ]}
-                        onPress={() => setSelectedOperator(op.id)}
-                        activeOpacity={0.8}
-                      >
-                        <View style={[styles.operatorSymbolCircle, { backgroundColor: `${op.color}22`, borderColor: op.color }]}>
-                          <Text style={[styles.operatorSymbolText, { color: op.color }]}>{op.symbol}</Text>
-                        </View>
-                        <Text style={styles.operatorLabel}>{op.label}</Text>
-                        <Text style={styles.operatorDesc}>{op.desc}</Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-
-                <Text style={[styles.sectionHeaderTitle, { marginTop: 18 }]}>2. SELECT LEVEL</Text>
-                <View style={styles.levelSelectorRow}>
-                  {[1, 2, 3].map((lvl) => {
-                    const cfg = LEVEL_CONFIGS[lvl];
-                    const isSelected = currentLevel === lvl;
-                    return (
-                      <TouchableOpacity
-                        key={lvl}
-                        style={[
-                          styles.levelPill,
-                          isSelected && styles.levelPillActive,
-                        ]}
-                        onPress={() => setCurrentLevel(lvl)}
-                        activeOpacity={0.8}
-                      >
-                        <Text style={[styles.levelPillTitle, isSelected && styles.levelPillTitleActive]}>
-                          LEVEL {lvl}
-                        </Text>
-                        <Text style={[styles.levelPillSub, isSelected && styles.levelPillSubActive]}>
-                          {cfg.totalQuestions} Values in {cfg.timeLimit}s
-                        </Text>
-                        <View style={styles.levelXpBadge}>
-                          <Text style={styles.levelXpText}>+{cfg.xpReward} XP</Text>
-                        </View>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-
-                {/* Start Button */}
-                <TouchableOpacity
-                  style={styles.startGameBtn}
-                  onPress={() => startLevel(currentLevel, selectedOperator)}
-                  activeOpacity={0.85}
+              <View style={styles.selectModeWrapper}>
+                {/* Scrollable Middle Container: All 4 Operators & 10 Levels */}
+                <ScrollView
+                  style={styles.selectModeScroll}
+                  contentContainerStyle={styles.selectModeContent}
+                  showsVerticalScrollIndicator={true}
+                  keyboardShouldPersistTaps="handled"
+                  nestedScrollEnabled={true}
                 >
-                  <LinearGradient
-                    colors={['#39FF14', '#00E5FF']}
-                    start={{ x: 0, y: 0 }}
-                    end={{ x: 1, y: 0 }}
-                    style={styles.startGameBtnGradient}
-                  >
-                    <Ionicons name="play" size={18} color="#050705" style={{ marginRight: 8 }} />
-                    <Text style={styles.startGameBtnText}>
-                      START LEVEL {currentLevel} ({currentLevelConfig.totalQuestions} VALUES • 30 SECONDS)
-                    </Text>
-                  </LinearGradient>
-                </TouchableOpacity>
-              </ScrollView>
+                  <Text style={styles.sectionHeaderTitle}>1. CHOOSE YOUR OPERATOR</Text>
+                  <Text style={styles.sectionHeaderSub}>
+                    Select the calculation mode: Addition (+), Subtraction (-), Multiplication (*), or Modulus (%)
+                  </Text>
+
+                  <View style={styles.operatorGrid}>
+                    {OPERATORS.map((op) => {
+                      const isSelected = selectedOperator === op.id;
+                      return (
+                        <TouchableOpacity
+                          key={op.id}
+                          style={[
+                            styles.operatorCard,
+                            isSelected && styles.operatorCardSelected,
+                          ]}
+                          onPress={() => handleSelectOperator(op.id)}
+                          activeOpacity={0.8}
+                        >
+                          <View
+                            style={[
+                              styles.operatorSymbolCircle,
+                              { backgroundColor: `${op.color}22`, borderColor: isSelected ? '#39FF14' : op.color },
+                            ]}
+                          >
+                            <Text style={[styles.operatorSymbolText, { color: isSelected ? '#39FF14' : op.color }]}>
+                              {op.symbol}
+                            </Text>
+                          </View>
+                          <View style={styles.operatorLabelRow}>
+                            <Text style={[styles.operatorLabel, isSelected && styles.operatorLabelActive]}>
+                              {op.label}
+                            </Text>
+                            {isSelected && (
+                              <Ionicons name="checkmark-circle" size={13} color="#39FF14" style={{ marginLeft: 4 }} />
+                            )}
+                          </View>
+                          <Text style={styles.operatorDesc}>{op.desc}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={[styles.sectionHeaderTitle, { marginTop: 18 }]}>2. SELECT LEVEL</Text>
+                  <Text style={styles.sectionHeaderSub}>
+                    Levels unlock sequentially. Complete each level within 30 seconds to unlock the next!
+                  </Text>
+
+                  <View style={styles.levelGridContainer}>
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((lvl) => {
+                      const cfg = LEVEL_CONFIGS[lvl] || { totalQuestions: 5 + lvl, timeLimit: 30, xpReward: lvl * 10, coinReward: lvl * 2 };
+                      const opUnlocked = (unlockedLevels && unlockedLevels[selectedOperator]) || 1;
+                      const isLocked = lvl > opUnlocked;
+                      const isCompleted = lvl < opUnlocked;
+                      const isSelected = currentLevel === lvl;
+
+                      return (
+                        <TouchableOpacity
+                          key={lvl}
+                          style={[
+                            styles.levelGridCard,
+                            isSelected && styles.levelGridCardSelected,
+                            isCompleted && styles.levelGridCardCompleted,
+                            isLocked && styles.levelGridCardLocked,
+                          ]}
+                          onPress={() => handleSelectLevel(lvl, isLocked)}
+                          activeOpacity={isLocked ? 0.7 : 0.85}
+                        >
+                          {/* Top Badge Row */}
+                          <View style={styles.levelCardTopBadgeRow}>
+                            <Text style={[styles.levelCardBadgeNum, isSelected && styles.levelCardBadgeNumActive]}>
+                              LEVEL {lvl}
+                            </Text>
+                            {isCompleted ? (
+                              <View style={styles.levelMiniBadgeCompleted}>
+                                <Ionicons name="checkmark-circle" size={13} color="#39FF14" />
+                              </View>
+                            ) : isLocked ? (
+                              <View style={styles.levelMiniBadgeLocked}>
+                                <Ionicons name="lock-closed" size={12} color="#888888" />
+                              </View>
+                            ) : (
+                              <View style={styles.levelMiniBadgeUnlocked}>
+                                <Ionicons name="flash" size={12} color="#39FF14" />
+                              </View>
+                            )}
+                          </View>
+
+                          {/* Subtitle / Requirement */}
+                          <Text style={[styles.levelCardSubText, isLocked && styles.levelCardSubTextLocked]}>
+                            {isLocked ? `Complete Level ${lvl - 1} to Unlock` : `${cfg.totalQuestions} Values in ${cfg.timeLimit}s`}
+                          </Text>
+
+                          {/* Reward Chip */}
+                          <View style={[styles.levelCardRewardPill, isLocked && styles.levelCardRewardPillLocked]}>
+                            <Text style={[styles.levelCardRewardText, isLocked && styles.levelCardRewardTextLocked]}>
+                              +{cfg.xpReward} XP • +{cfg.coinReward || (lvl * 2)} Coins
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+
+                {/* Fixed Footer Bar — Always visible & accessible at the bottom! */}
+                <View style={styles.modalFooter}>
+                  {(() => {
+                    const opUnlocked = (unlockedLevels && unlockedLevels[selectedOperator]) || 1;
+                    const isCurrentLocked = currentLevel > opUnlocked;
+
+                    if (isCurrentLocked) {
+                      return (
+                        <View style={styles.startGameBtnLocked}>
+                          <Ionicons name="lock-closed" size={18} color="#777777" style={{ marginRight: 8 }} />
+                          <Text style={styles.startGameBtnTextLocked}>
+                            LOCKED • COMPLETE LEVEL {currentLevel - 1} TO UNLOCK
+                          </Text>
+                        </View>
+                      );
+                    }
+
+                    return (
+                      <TouchableOpacity
+                        style={styles.startGameBtn}
+                        onPress={() => startLevel(currentLevel, selectedOperator)}
+                        activeOpacity={0.85}
+                      >
+                        <LinearGradient
+                          colors={['#39FF14', '#00E5FF']}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={styles.startGameBtnGradient}
+                        >
+                          <Ionicons name="play" size={18} color="#050705" style={{ marginRight: 8 }} />
+                          <Text style={styles.startGameBtnText}>
+                            START LEVEL {currentLevel} ({currentLevelConfig.totalQuestions} VALUES • 30 SECONDS)
+                          </Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    );
+                  })()}
+                </View>
+              </View>
             )}
 
             {/* SCREEN 2: ACTIVE PLAYING */}
@@ -866,7 +1001,7 @@ export const TargetNumberGameModal = ({
                 <View style={styles.hudRow}>
                   <View style={styles.hudBadge}>
                     <Text style={styles.hudBadgeLabel}>LEVEL</Text>
-                    <Text style={styles.hudBadgeValue}>{currentLevel} / 3</Text>
+                    <Text style={styles.hudBadgeValue}>{currentLevel} / 10</Text>
                   </View>
 
                   <View style={styles.hudBadge}>
@@ -1156,38 +1291,68 @@ export const TargetNumberGameModal = ({
 const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.82)',
+    backgroundColor: 'rgba(0, 0, 0, 0.85)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 16,
+    position: 'relative',
+    ...(Platform.OS === 'web'
+      ? {
+          backdropFilter: 'blur(14px)',
+          WebkitBackdropFilter: 'blur(14px)',
+        }
+      : {}),
+  },
+  modalBackdropTouch: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1,
+    ...(Platform.OS === 'web' ? { cursor: 'default' } : {}),
   },
   gameCardContainer: {
     width: '100%',
     maxWidth: 680,
+    maxHeight: '90vh',
+    height: Platform.OS === 'web' ? '88vh' : undefined,
     borderRadius: 20,
     overflow: 'hidden',
     borderWidth: 1.5,
-    borderColor: 'rgba(57, 255, 20, 0.35)',
+    borderColor: 'rgba(57, 255, 20, 0.4)',
+    backgroundColor: '#08110B',
+    zIndex: 10,
+    display: 'flex',
+    flexDirection: 'column',
     ...(Platform.OS === 'web'
       ? {
-          boxShadow: '0 10px 40px rgba(0, 0, 0, 0.9), 0 0 25px rgba(57, 255, 20, 0.18)',
+          boxShadow: '0 10px 45px rgba(0, 0, 0, 0.95), 0 0 35px rgba(57, 255, 20, 0.25)',
         }
       : {}),
   },
   gameCardMobile: {
     maxWidth: '100%',
+    maxHeight: '96vh',
+    height: '96vh',
   },
   modalGradient: {
-    padding: 20,
+    padding: 18,
+    flex: 1,
+    maxHeight: '100%',
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
   },
   topGameBar: {
+    flexShrink: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(57, 255, 20, 0.15)',
-    paddingBottom: 14,
-    marginBottom: 16,
+    borderBottomColor: 'rgba(57, 255, 20, 0.18)',
+    paddingBottom: 12,
+    marginBottom: 12,
   },
   gameTitleWrap: {
     flexDirection: 'row',
@@ -1225,8 +1390,34 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
   },
+  selectModeWrapper: {
+    flex: 1,
+    minHeight: 0,
+    display: 'flex',
+    flexDirection: 'column',
+    overflow: 'hidden',
+  },
+  selectModeScroll: {
+    flex: 1,
+    minHeight: 0,
+    ...(Platform.OS === 'web'
+      ? {
+          overflowY: 'auto',
+          overscrollBehavior: 'contain',
+          WebkitOverflowScrolling: 'touch',
+        }
+      : {}),
+  },
   selectModeContent: {
-    paddingBottom: 10,
+    paddingBottom: 16,
+    paddingRight: 6,
+  },
+  modalFooter: {
+    flexShrink: 0,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(57, 255, 20, 0.18)',
+    backgroundColor: 'rgba(8, 17, 11, 0.98)',
   },
   sectionHeaderTitle: {
     color: colors.textPrimary,
@@ -1254,7 +1445,23 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255, 255, 255, 0.1)',
     padding: 12,
     alignItems: 'center',
-    ...(Platform.OS === 'web' ? { cursor: 'pointer', transition: 'all 0.2s ease' } : {}),
+    ...(Platform.OS === 'web'
+      ? {
+          cursor: 'pointer',
+          userSelect: 'none',
+          transition: 'all 0.18s ease',
+        }
+      : {}),
+  },
+  operatorCardSelected: {
+    borderColor: '#39FF14',
+    borderWidth: 2,
+    backgroundColor: 'rgba(57, 255, 20, 0.18)',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 0 16px rgba(57, 255, 20, 0.4)',
+        }
+      : {}),
   },
   operatorSymbolCircle: {
     width: 44,
@@ -1269,12 +1476,21 @@ const styles = StyleSheet.create({
     fontSize: 22,
     fontWeight: '900',
   },
+  operatorLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
   operatorLabel: {
     color: colors.textPrimary,
     fontSize: 11,
     fontWeight: '800',
     textAlign: 'center',
-    marginBottom: 2,
+  },
+  operatorLabelActive: {
+    color: '#39FF14',
+    fontWeight: '900',
   },
   operatorDesc: {
     color: colors.textSecondary,
@@ -1286,6 +1502,114 @@ const styles = StyleSheet.create({
     gap: 10,
     marginTop: 8,
     marginBottom: 20,
+  },
+  levelGridContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+    marginBottom: 16,
+  },
+  levelGridCard: {
+    width: '48%',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.09)',
+    borderRadius: 12,
+    padding: 12,
+    ...(Platform.OS === 'web'
+      ? {
+          cursor: 'pointer',
+          userSelect: 'none',
+          transition: 'all 0.18s ease',
+        }
+      : {}),
+  },
+  levelGridCardSelected: {
+    borderColor: '#39FF14',
+    borderWidth: 2,
+    backgroundColor: 'rgba(57, 255, 20, 0.22)',
+    ...(Platform.OS === 'web'
+      ? {
+          boxShadow: '0 0 18px rgba(57, 255, 20, 0.45)',
+          transform: 'translateY(-1px)',
+        }
+      : {}),
+  },
+  levelGridCardCompleted: {
+    borderColor: 'rgba(57, 255, 20, 0.35)',
+    backgroundColor: 'rgba(57, 255, 20, 0.05)',
+  },
+  levelGridCardLocked: {
+    borderColor: 'rgba(255, 255, 255, 0.04)',
+    backgroundColor: 'rgba(15, 15, 15, 0.65)',
+    opacity: 0.6,
+    ...(Platform.OS === 'web' ? { cursor: 'not-allowed' } : {}),
+  },
+  levelCardTopBadgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  levelCardBadgeNum: {
+    color: colors.textSecondary,
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  levelCardBadgeNumActive: {
+    color: '#39FF14',
+  },
+  levelMiniBadgeCompleted: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(57, 255, 20, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  levelMiniBadgeLocked: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  levelMiniBadgeUnlocked: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: 'rgba(57, 255, 20, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  levelCardSubText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    marginBottom: 8,
+    lineHeight: 14,
+  },
+  levelCardSubTextLocked: {
+    color: '#777777',
+  },
+  levelCardRewardPill: {
+    backgroundColor: 'rgba(57, 255, 20, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+  levelCardRewardPillLocked: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+  },
+  levelCardRewardText: {
+    color: colors.primary,
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  levelCardRewardTextLocked: {
+    color: '#666666',
   },
   levelPill: {
     flex: 1,
@@ -1342,6 +1666,25 @@ const styles = StyleSheet.create({
           boxShadow: '0 0 20px rgba(57, 255, 20, 0.35)',
         }
       : {}),
+  },
+  startGameBtnLocked: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1.5,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 10,
+    ...(Platform.OS === 'web' ? { cursor: 'not-allowed' } : {}),
+  },
+  startGameBtnTextLocked: {
+    color: '#777777',
+    fontSize: 12,
+    fontWeight: '800',
+    letterSpacing: 0.8,
   },
   startGameBtnGradient: {
     flexDirection: 'row',
