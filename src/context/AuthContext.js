@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AuthService } from '../services/authService';
 import { GamingActivityService, toDateKey, getAppTimezone } from '../services/gamingActivityService';
+import { StreakRewardsService } from '../services/streakRewardsService';
 import { SessionStorage } from '../services/sessionStorage';
 
 const AuthContext = createContext(null);
@@ -245,6 +246,36 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  // REDEEM STREAK MILESTONE REWARD (Master Prompt: Streak Rewards Store 7 to 500 Days)
+  const redeemStreakReward = async (rewardId) => {
+    if (!user) return { success: false, error: 'Not authenticated' };
+    try {
+      const res = await StreakRewardsService.redeemReward(user.id, rewardId);
+      if (res.success && res.user) {
+        setUser(res.user);
+      }
+      return res;
+    } catch (err) {
+      console.error('Error in redeemStreakReward:', err);
+      return { success: false, error: err.message || 'Redemption failed' };
+    }
+  };
+
+  // Equip unlocked cosmetic
+  const equipCosmetic = async (cosmeticType, cosmeticValue) => {
+    if (!user) return null;
+    try {
+      const res = await StreakRewardsService.equipCosmetic(user.id, cosmeticType, cosmeticValue);
+      if (cosmeticType === 'badge') {
+        setUser((prev) => (prev ? { ...prev, badge: cosmeticValue } : prev));
+      }
+      return res;
+    } catch (err) {
+      console.error('Error in equipCosmetic:', err);
+      return null;
+    }
+  };
+
   // Test Simulation helper: simulate missed calendar days for test verification
   const simulateMissedDays = async (days = 1) => {
     if (!user) return null;
@@ -280,6 +311,8 @@ export const AuthProvider = ({ children }) => {
         refreshStreak,
         restoreStreak,
         exchangeXpForCoins,
+        redeemStreakReward,
+        equipCosmetic,
         simulateMissedDays,
       }}
     >

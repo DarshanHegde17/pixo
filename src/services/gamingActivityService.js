@@ -19,9 +19,9 @@ let isRestoringStreakLock = false;
 let isExchangingLock = false;
 
 /**
- * Standard milestones for streak badges
+ * Standard milestones for streak badges & rewards (7 to 500 Days)
  */
-export const STREAK_MILESTONES = [3, 7, 14, 30, 60, 100];
+export const STREAK_MILESTONES = [7, 14, 25, 50, 75, 100, 150, 200, 250, 300, 365, 400, 500];
 
 /**
  * 3 Daily Quests per Master Prompt Section 4
@@ -921,7 +921,7 @@ export const GamingActivityService = {
     }
 
     // 5. Calculate next milestone and progress
-    const nextMilestone = STREAK_MILESTONES.find((m) => m > currentStreak) || 100;
+    const nextMilestone = STREAK_MILESTONES.find((m) => m > currentStreak) || 500;
     const progressPercent = Math.min(100, Math.round((currentStreak / nextMilestone) * 100));
 
     // Formatted last completion date

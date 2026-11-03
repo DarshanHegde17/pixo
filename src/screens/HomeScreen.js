@@ -564,7 +564,11 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                     } else {
                       Alert.alert(
                         '🔥 Daily Streak Active',
-                        `Current Streak: ${userStreak} Days\nMaintain consecutive calendar days by completing at least 1 game activity daily!`
+                        `Current Streak: ${userStreak} Days\nMaintain consecutive calendar days by completing at least 1 game activity daily!`,
+                        [
+                          { text: 'Streak Rewards Store', onPress: () => setActiveTab('store') },
+                          { text: 'Close', style: 'cancel' },
+                        ]
                       );
                     }
                   }}
@@ -1474,6 +1478,26 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 ]}
               >
                 Quests
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.navItem, activeTab === 'store' && styles.navItemActive]}
+              onPress={() => setActiveTab('store')}
+              activeOpacity={0.75}
+            >
+              <Ionicons
+                name={activeTab === 'store' ? 'flame' : 'flame-outline'}
+                size={20}
+                color={activeTab === 'store' ? '#FF9500' : colors.textSecondary}
+              />
+              <Text
+                style={[
+                  styles.navText,
+                  activeTab === 'store' && styles.navTextActive,
+                ]}
+              >
+                Store
               </Text>
             </TouchableOpacity>
 
