@@ -1,5 +1,5 @@
 [build]
-  command = "npm run build"
+  command = "node node_modules/expo/bin/cli export --platform web"
   publish = "dist"
 
 [[redirects]]
