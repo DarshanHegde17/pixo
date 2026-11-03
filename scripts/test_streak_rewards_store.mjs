@@ -70,24 +70,35 @@ async function runTests() {
   usersList.push(userRecord);
   await SessionStorage.setItem(STORAGE_KEYS.USERS_REGISTRY, usersList);
 
-  // Helper to set test player streak & coins cleanly
+  // Helper to set test player streak & coins cleanly with real completions
   const setTestPlayerState = async ({ streak, coins, longestStreak }) => {
-    // 1. Update user coins & streak
-    await AuthService.updateUserProfile(testUserId, { streak, coins });
-    // 2. Set persistent streak state
-    const todayKey = toDateKey(new Date(), timezone);
-    const state = {
-      currentStreak: streak,
-      longestStreak: longestStreak || streak,
-      lastActivityDate: todayKey,
-      streakStatus: streak > 0 ? 'active' : 'none',
-      missedDays: 0,
-      previousStreak: streak,
-    };
-    await SessionStorage.setItem(`@soloplay_user_streak_state_${testUserId}`, state);
-    if (longestStreak) {
-      await SessionStorage.setItem(`@soloplay_longest_streak_${testUserId}`, longestStreak);
+    // 0. Ensure user initialized flag is set so sessions aren't reset
+    await GamingActivityService.ensureUserDataInitialized(testUserId);
+
+    // 1. Generate real consecutive completions ending today
+    const sessions = [];
+    const now = new Date();
+    for (let i = streak - 1; i >= 0; i--) {
+      const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
+      sessions.push({
+        id: `sess_${Date.now()}_${i}`,
+        userId: testUserId,
+        gameId: 'cyber_strike_2099',
+        startedAt: d.toISOString(),
+        completedAt: d.toISOString(),
+        dateKey: toDateKey(d, timezone),
+        status: 'completed',
+      });
     }
+    await GamingActivityService.saveUserSessions(testUserId, sessions);
+
+    // 2. Update user coins & streak
+    await AuthService.updateUserProfile(testUserId, { streak, coins });
+
+    // 3. Update persistent longest streak
+    const effLongest = Math.max(longestStreak || 0, streak);
+    await SessionStorage.setItem(`@soloplay_longest_streak_${testUserId}`, effLongest);
+    await GamingActivityService.getUserStreakState(testUserId, timezone);
   };
 
   // Helper to clear user redemptions
