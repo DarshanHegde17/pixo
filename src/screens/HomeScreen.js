@@ -20,6 +20,7 @@ import { GameDetailsModal } from '../components/GameDetailsModal';
 import { ProfileScreen } from './ProfileScreen';
 import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunnerModal';
 import { TargetNumberGameModal } from '../components/gameplay/TargetNumberGameModal';
+import { LogicCodeGameModal } from '../components/gameplay/LogicCodeGameModal';
 import { RestoreStreakModal } from '../components/profile/RestoreStreakModal';
 import { CoinStoreScreen } from './CoinStoreScreen';
 import {
@@ -46,6 +47,23 @@ const CATEGORIES = [
 
 // Continue Playing Games
 const RECENT_GAMES = [
+  {
+    id: 'g_cyber_strike',
+    title: 'Cyber Strike: 2099',
+    category: 'Logic Code / Brain Training',
+    catId: 'puzzle',
+    progress: 1.0,
+    progressText: '40 Levels / 4 Sectors',
+    lastPlayed: 'Ready to Play',
+    rating: 5.0,
+    accentColor: '#00E5FF',
+    gradient: ['#0A2A2E', '#031318'],
+    icon: 'terminal-outline',
+    badge: 'LOGIC CODE',
+    desc: 'Think Smart. Solve Fast. Strike Strong. Master Pattern Recognition, Number Intelligence, Root & Power, and Missing BODMAS Operators across 40 tactical levels.',
+    tags: ['Logic Code', '40 Levels', 'BODMAS', 'Primes & Powers', 'Brain Training'],
+    isCyberStrike: true,
+  },
   {
     id: 'g_target_no',
     title: 'Target Number (Target No.)',
@@ -238,6 +256,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [quests, setQuests] = useState(INITIAL_DAILY_QUESTS);
   const [liveSessionGame, setLiveSessionGame] = useState(null);
   const [isTargetGameOpen, setIsTargetGameOpen] = useState(false);
+  const [isLogicCodeOpen, setIsLogicCodeOpen] = useState(false);
   const [hasActiveTargetSession, setHasActiveTargetSession] = useState(false);
 
   // Load verified user reward transactions
@@ -393,6 +412,17 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   // Launch Game Handler — opens interactive gameplay simulator
   const handleStartGame = (game) => {
     setSelectedGameModal(null);
+    if (
+      game?.id === 'cyber_strike' ||
+      game?.id === 'cyber-strike' ||
+      game?.id === 'g_cyber_strike' ||
+      game?.isCyberStrike ||
+      game?.title?.toLowerCase().includes('cyber strike') ||
+      game?.title?.toLowerCase().includes('logic code')
+    ) {
+      setIsLogicCodeOpen(true);
+      return;
+    }
     if (
       game?.id === 'g_target_no' ||
       game?.isTargetGame ||
@@ -1152,11 +1182,14 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
             <TouchableOpacity
               onPress={() =>
                 setSelectedGameModal({
+                  id: 'cyber_strike',
                   title: 'Cyber Strike: 2099',
-                  category: 'Cyberpunk Action RPG',
+                  subtitle: 'LOGIC CODE: Think Smart. Solve Fast. Strike Strong.',
+                  category: 'Cyberpunk Tactical / Brain Training',
                   rating: '4.9 ★ (18.2k Reviews)',
-                  desc: 'Hack the mega-corporations as a lone cyber operative. Full campaign with 30+ hours of custom story missions, weapon crafting, and cybernetic augmentations.',
-                  tags: ['Solo Exclusive', 'Offline Capable', 'RTX Mode', 'Gamepad Ready'],
+                  desc: 'Tactical cyber-intelligence brain-training module. Master mathematical sequences, prime deduction, radical roots, and BODMAS operator calculations across 40 tactical levels.',
+                  tags: ['Logic Code', '40 Levels', 'BODMAS Matrix', 'Primes & Roots', 'Brain Training'],
+                  isCyberStrike: true,
                 })
               }
             >
@@ -1165,14 +1198,17 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           </View>
 
           <FeaturedHeroCard
-            onPlay={() => handleStartGame({ title: 'Cyber Strike: 2099' })}
+            onPlay={() => handleStartGame({ title: 'Cyber Strike: 2099', id: 'cyber_strike', isCyberStrike: true })}
             onViewDetails={() =>
               setSelectedGameModal({
+                id: 'cyber_strike',
                 title: 'Cyber Strike: 2099',
-                category: 'Cyberpunk Action RPG',
+                subtitle: 'LOGIC CODE: Think Smart. Solve Fast. Strike Strong.',
+                category: 'Cyberpunk Tactical / Brain Training',
                 rating: '4.9 ★ (18.2k Reviews)',
-                desc: 'Hack the mega-corporations as a lone cyber operative. Full campaign with 30+ hours of custom story missions, weapon crafting, and cybernetic augmentations.',
-                tags: ['Solo Exclusive', 'Offline Capable', 'RTX Mode', 'Single Player'],
+                desc: 'Tactical cyber-intelligence brain-training module. Master mathematical sequences, prime deduction, radical roots, and BODMAS operator calculations across 40 tactical levels.',
+                tags: ['Logic Code', '40 Levels', 'BODMAS Matrix', 'Primes & Roots', 'Brain Training'],
+                isCyberStrike: true,
               })
             }
           />
@@ -1498,6 +1534,13 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
         visible={isTargetGameOpen}
         initialLevel={targetLevelToPlay}
         onClose={() => setIsTargetGameOpen(false)}
+        onSessionComplete={handleTransactionsChanged}
+      />
+
+      {/* Cyber Strike: 2099 - Logic Code Brain-Training Game Modal (40 Levels) */}
+      <LogicCodeGameModal
+        visible={isLogicCodeOpen}
+        onClose={() => setIsLogicCodeOpen(false)}
         onSessionComplete={handleTransactionsChanged}
       />
 
