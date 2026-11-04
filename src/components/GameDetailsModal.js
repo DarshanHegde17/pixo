@@ -13,6 +13,8 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../theme';
 import { GamingActivityService } from '../services/gamingActivityService';
+import { NavigationService } from '../services/navigationService';
+import { PixoBackButton } from './common/PixoBackButton';
 import { useAuth } from '../context/AuthContext';
 
 const { width } = Dimensions.get('window');
@@ -69,6 +71,21 @@ export const GameDetailsModal = ({
     };
   }, [visible, game?.id, user?.id]);
 
+  // Centralized Navigation Back Interceptor
+  useEffect(() => {
+    if (visible) {
+      const unregister = NavigationService.registerBackHandler(
+        'game_details_modal',
+        () => {
+          onClose();
+          return true;
+        },
+        50
+      );
+      return unregister;
+    }
+  }, [visible, onClose]);
+
   if (!visible || !game) return null;
 
   const isCurrentLevelLocked = selectedLevel > unlockedLevel;
@@ -98,9 +115,18 @@ export const GameDetailsModal = ({
             <View style={styles.innerCard}>
               {/* Header */}
               <View style={styles.modalHeader}>
-                <View style={styles.titleWrap}>
-                  <Text style={styles.modalGenre}>{game.category || game.genre || 'Single Player'}</Text>
-                  <Text style={styles.modalTitle}>{game.title}</Text>
+                <View style={styles.headerLeftWithBack}>
+                  <PixoBackButton
+                    onPress={onClose}
+                    variant="circle"
+                    size={16}
+                    style={{ marginRight: 10 }}
+                    accessibilityLabel="Back to game catalog"
+                  />
+                  <View style={styles.titleWrap}>
+                    <Text style={styles.modalGenre}>{game.category || game.genre || 'Single Player'}</Text>
+                    <Text style={styles.modalTitle}>{game.title}</Text>
+                  </View>
                 </View>
                 <TouchableOpacity
                   style={styles.modalCloseBtn}
@@ -313,8 +339,14 @@ const styles = StyleSheet.create({
     flexShrink: 0,
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     marginBottom: spacing.sm,
+  },
+  headerLeftWithBack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    paddingRight: spacing.sm,
   },
   modalBodyScroll: {
     flex: 1,

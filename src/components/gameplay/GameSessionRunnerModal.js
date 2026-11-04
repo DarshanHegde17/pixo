@@ -13,6 +13,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../../theme';
 import { GamingActivityService, formatDuration } from '../../services/gamingActivityService';
 import { useAuth } from '../../context/AuthContext';
+import { PixoBackButton, PixoPauseModal } from '../common';
+import { NavigationService } from '../../services/navigationService';
 
 export const GameSessionRunnerModal = ({
   visible,
@@ -29,6 +31,7 @@ export const GameSessionRunnerModal = ({
   const [comboHits, setComboHits] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
   const [notification, setNotification] = useState(null);
+  const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
 
   const timerRef = useRef(null);
 
@@ -189,8 +192,37 @@ export const GameSessionRunnerModal = ({
     }
   };
 
-  // 4. PAUSE / SAVE PROGRESS (Leaves as in_progress)
-  const handlePauseAndSave = () => {
+  // Centralized Back Navigation Registration
+  useEffect(() => {
+    if (!visible) return;
+
+    const unregister = NavigationService.registerBackHandler(
+      'game_session_runner_modal',
+      () => {
+        if (isPauseModalOpen) return true;
+        handleOpenPause();
+        return true;
+      },
+      80
+    );
+
+    return unregister;
+  }, [visible, isPauseModalOpen]);
+
+  // Pause menu trigger
+  const handleOpenPause = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    setIsPauseModalOpen(true);
+  };
+
+  // Resume game from pause menu
+  const handleResumeGame = () => {
+    setIsPauseModalOpen(false);
+  };
+
+  // 4. PAUSE / SAVE PROGRESS & EXIT
+  const handleConfirmExit = () => {
+    setIsPauseModalOpen(false);
     if (onSessionUpdated) onSessionUpdated();
     onClose();
   };
@@ -201,20 +233,29 @@ export const GameSessionRunnerModal = ({
         <View style={styles.modalCard}>
           {/* Top HUD Header */}
           <View style={styles.hudHeader}>
-            <View style={styles.hudTitleWrap}>
-              <View style={styles.liveIndicator}>
-                <View style={styles.livePulseDot} />
-                <Text style={styles.liveText}>LIVE SIMULATION SESSION</Text>
+            <View style={styles.headerLeftGroup}>
+              <PixoBackButton
+                onPress={handleOpenPause}
+                variant="circle"
+                size={18}
+                style={{ marginRight: 10 }}
+                accessibilityLabel="Pause simulation and return"
+              />
+              <View style={styles.hudTitleWrap}>
+                <View style={styles.liveIndicator}>
+                  <View style={styles.livePulseDot} />
+                  <Text style={styles.liveText}>LIVE SIMULATION SESSION</Text>
+                </View>
+                <Text style={styles.gameTitle} numberOfLines={1}>
+                  {game.title}
+                </Text>
+                <Text style={styles.gameCategory}>
+                  {game.category || game.genre || 'Action Campaign'} • Session ID: {activeSession?.id?.substring(0, 14)}
+                </Text>
               </View>
-              <Text style={styles.gameTitle} numberOfLines={1}>
-                {game.title}
-              </Text>
-              <Text style={styles.gameCategory}>
-                {game.category || game.genre || 'Action Campaign'} • Session ID: {activeSession?.id?.substring(0, 14)}
-              </Text>
             </View>
 
-            <TouchableOpacity style={styles.closeBtn} onPress={handlePauseAndSave}>
+            <TouchableOpacity style={styles.closeBtn} onPress={handleOpenPause}>
               <Ionicons name="close" size={20} color={colors.textSecondary} />
             </TouchableOpacity>
           </View>
@@ -329,6 +370,19 @@ export const GameSessionRunnerModal = ({
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* Pixo Pause Menu Modal */}
+        <PixoPauseModal
+          visible={isPauseModalOpen}
+          gameTitle={game?.title || 'GAME SIMULATION'}
+          level={game?.difficulty || 1}
+          timeLeft={elapsedSeconds}
+          score={sessionScore}
+          currentQuestion={comboHits}
+          totalQuestions={10}
+          onResume={handleResumeGame}
+          onExit={handleConfirmExit}
+        />
       </View>
     </Modal>
   );
@@ -360,6 +414,12 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'flex-start',
     marginBottom: 16,
+  },
+  headerLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    marginRight: 10,
   },
   hudTitleWrap: {
     flex: 1,

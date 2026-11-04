@@ -20,6 +20,8 @@ import {
   StreakRewardsService,
   DEFAULT_STREAK_REWARDS,
 } from '../services/streakRewardsService';
+import { NavigationService } from '../services/navigationService';
+import { PixoBackButton } from '../components/common/PixoBackButton';
 import { colors, spacing, borderRadius } from '../theme';
 
 /**
@@ -86,6 +88,37 @@ export const CoinStoreScreen = ({ onNavigateHome }) => {
 
   // Milestone Progress Info
   const [milestoneProgress, setMilestoneProgress] = useState(null);
+
+  // Handle Back interception for any open store modals
+  useEffect(() => {
+    const isAnyModalOpen = Boolean(selectedPackage || rewardToRedeem || successExchange || redeemSuccessData);
+    if (isAnyModalOpen) {
+      const unregister = NavigationService.registerBackHandler(
+        'coin_store_modals',
+        () => {
+          if (successExchange) {
+            setSuccessExchange(null);
+            return true;
+          }
+          if (redeemSuccessData) {
+            setRedeemSuccessData(null);
+            return true;
+          }
+          if (selectedPackage) {
+            setSelectedPackage(null);
+            return true;
+          }
+          if (rewardToRedeem) {
+            setRewardToRedeem(null);
+            return true;
+          }
+          return false;
+        },
+        55
+      );
+      return unregister;
+    }
+  }, [selectedPackage, rewardToRedeem, successExchange, redeemSuccessData]);
 
   // Load store catalog, user redemptions, and equipped cosmetics
   const loadStoreData = useCallback(async () => {
@@ -307,16 +340,16 @@ export const CoinStoreScreen = ({ onNavigateHome }) => {
         {/* Header Bar */}
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
-            {onNavigateHome && (
-              <TouchableOpacity
-                style={styles.backBtn}
-                onPress={onNavigateHome}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="arrow-back" size={18} color={colors.primary} />
-                <Text style={styles.backBtnText}>DASHBOARD</Text>
-              </TouchableOpacity>
-            )}
+            <PixoBackButton
+              onPress={() => {
+                if (onNavigateHome) onNavigateHome();
+                else NavigationService.goBack();
+              }}
+              label="DASHBOARD"
+              variant="pill"
+              size={15}
+              accessibilityLabel="Navigate back to Dashboard"
+            />
 
             <View style={styles.titleBadge}>
               <Ionicons name="flame" size={15} color="#FF6A00" style={{ marginRight: 6 }} />

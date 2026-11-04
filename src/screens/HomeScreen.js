@@ -26,6 +26,8 @@ import {
   DEFAULT_DAILY_QUESTS,
 } from '../services/gamingActivityService';
 import { GamePersistenceService } from '../services/gamePersistenceService';
+import { NavigationService } from '../services/navigationService';
+import { PixoBackButton, PixoExitConfirmModal } from '../components/common';
 import { useAuth } from '../context/AuthContext';
 import { colors, spacing } from '../theme';
 import { DASHBOARD_ART } from '../utils/dashboardArt';
@@ -280,6 +282,31 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [hasActiveTargetSession, setHasActiveTargetSession] = useState(false);
   const [targetLevelToPlay, setTargetLevelToPlay] = useState(1);
   const [unlockedLevel, setUnlockedLevel] = useState(1);
+  const [isExitConfirmVisible, setIsExitConfirmVisible] = useState(false);
+
+  // Centralized Navigation Service Subscriptions
+  useEffect(() => {
+    const unsubRoute = NavigationService.subscribe((route) => {
+      if (route && route.id) {
+        if (['home', 'games', 'quests', 'store', 'profile'].includes(route.id)) {
+          setActiveTab(route.id);
+        }
+      }
+    });
+
+    const unsubExit = NavigationService.onExitRequest(() => {
+      setIsExitConfirmVisible(true);
+    });
+
+    return () => {
+      unsubRoute();
+      unsubExit();
+    };
+  }, []);
+
+  const handleNavigate = (routeId, params = {}) => {
+    NavigationService.navigate(routeId, params);
+  };
 
   // Daily Quests state
   const [dailyQuests, setDailyQuests] = useState([]);
@@ -515,7 +542,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               {/* Profile Avatar */}
               <TouchableOpacity
                 style={styles.avatarButton}
-                onPress={() => setActiveTab('profile')}
+                onPress={() => handleNavigate('profile')}
                 activeOpacity={0.8}
                 accessibilityLabel="Player Profile"
               >
@@ -528,7 +555,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               {/* Coins Pill: 1,250 + */}
               <TouchableOpacity
                 style={styles.headerCoinPill}
-                onPress={() => setActiveTab('store')}
+                onPress={() => handleNavigate('store')}
                 activeOpacity={0.8}
               >
                 <Ionicons name="cash" size={13} color="#FFD700" style={{ marginRight: 4 }} />
@@ -541,7 +568,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 style={[styles.headerStreakPill, isStreakBroken && styles.headerStreakPillBroken]}
                 onPress={() => {
                   if (isStreakBroken) setIsRestoreModalOpen(true);
-                  else setActiveTab('store');
+                  else handleNavigate('store');
                 }}
                 activeOpacity={0.8}
               >
@@ -564,7 +591,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               {/* XP Pill: XP 750 */}
               <TouchableOpacity
                 style={styles.headerXpPill}
-                onPress={() => setActiveTab('store')}
+                onPress={() => handleNavigate('store')}
                 activeOpacity={0.8}
               >
                 <Ionicons name="flash" size={12} color="#00E5FF" style={{ marginRight: 3 }} />
@@ -602,14 +629,294 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           {/* Tab Views Routing */}
           {activeTab === 'profile' ? (
             <ProfileScreen
-              onNavigateHome={() => setActiveTab('home')}
-              onNavigateGames={() => setActiveTab('games')}
-              onNavigateQuests={() => setActiveTab('quests')}
+              onNavigateHome={() => handleNavigate('home')}
+              onNavigateGames={() => handleNavigate('games')}
+              onNavigateQuests={() => handleNavigate('quests')}
             />
           ) : activeTab === 'store' ? (
             <CoinStoreScreen
-              onNavigateHome={() => setActiveTab('home')}
+              onNavigateHome={() => handleNavigate('home')}
             />
+          ) : activeTab === 'games' ? (
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scrollContent}
+            >
+              <View style={styles.dashboardContainer}>
+                {/* Header Bar with Back Button */}
+                <View style={styles.tabSubHeaderRow}>
+                  <PixoBackButton
+                    onPress={() => NavigationService.goBack()}
+                    label="DASHBOARD"
+                    variant="pill"
+                    size={14}
+                    accessibilityLabel="Back to Dashboard"
+                  />
+                  <View style={styles.tabBadge}>
+                    <Ionicons name="game-controller" size={14} color="#39FF14" style={{ marginRight: 6 }} />
+                    <Text style={styles.tabBadgeText}>PIXO // GAMES DIRECTORY</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.pageHeadingText}>ALL GAMES DIRECTORY</Text>
+                <Text style={styles.pageSubHeadingText}>
+                  Explore every single-player game, logic puzzle, and speed math challenge. Win matches to progress your daily streak and earn PIXO Coins!
+                </Text>
+
+                {/* Futuristic Pill Search Bar */}
+                <View style={styles.searchBarPill}>
+                  <Ionicons name="search" size={18} color="#39FF14" style={{ marginRight: 10 }} />
+                  <TextInput
+                    style={styles.searchInputPill}
+                    placeholder="Search all games, genres, or keywords..."
+                    placeholderTextColor="#4E7056"
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                  />
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setSearchQuery('')}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <Ionicons name="close-circle" size={18} color="#8A9E8D" />
+                    </TouchableOpacity>
+                  )}
+                </View>
+
+                {/* Category Pills Filter */}
+                <View style={styles.categoriesWrapper}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={styles.categoriesContent}
+                  >
+                    {CATEGORIES.map((cat) => {
+                      const isSelected = selectedCategory === cat.id;
+                      return (
+                        <TouchableOpacity
+                          key={cat.id}
+                          style={[
+                            styles.categoryPill,
+                            isSelected && styles.categoryPillSelected,
+                          ]}
+                          onPress={() => setSelectedCategory(cat.id)}
+                          activeOpacity={0.75}
+                        >
+                          <Ionicons
+                            name={cat.icon}
+                            size={14}
+                            color={isSelected ? '#050705' : '#8A9E8D'}
+                            style={{ marginRight: 6 }}
+                          />
+                          <Text
+                            style={[
+                              styles.categoryPillText,
+                              isSelected && styles.categoryPillTextSelected,
+                            ]}
+                          >
+                            {cat.label}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                {/* All Games Grid */}
+                <View style={styles.sectionBlock}>
+                  <View style={styles.sectionTitleRow}>
+                    <View style={styles.sectionTitleLeft}>
+                      <Ionicons name="grid" size={18} color="#39FF14" style={{ marginRight: 7 }} />
+                      <Text style={styles.sectionTitleText}>All Games Catalog</Text>
+                      <View style={styles.gameCountBadge}>
+                        <Text style={styles.gameCountBadgeText}>{filteredGames.length} AVAILABLE</Text>
+                      </View>
+                    </View>
+                    <Text style={styles.swipeExploreText}>Tap card to play</Text>
+                  </View>
+
+                  <View style={styles.gamesGrid}>
+                    {filteredGames.map((game) => (
+                      <TouchableOpacity
+                        key={game.id}
+                        style={styles.gridGameCard}
+                        onPress={() => handleStartGame(game)}
+                        activeOpacity={0.88}
+                      >
+                        <Image
+                          source={{ uri: game.imageUrl }}
+                          style={styles.gridCardImage}
+                          resizeMode="cover"
+                        />
+                        <LinearGradient
+                          colors={['rgba(0,0,0,0.25)', 'rgba(4, 12, 7, 0.65)', 'rgba(4, 7, 5, 0.98)']}
+                          locations={[0, 0.42, 1]}
+                          style={StyleSheet.absoluteFillObject}
+                        />
+                        <View style={styles.gridCardTopRow}>
+                          <View
+                            style={[
+                              styles.gridBadgePill,
+                              { borderColor: game.badgeColor || '#39FF14' },
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.gridBadgeText,
+                                { color: game.badgeColor || '#39FF14' },
+                              ]}
+                            >
+                              {game.badge}
+                            </Text>
+                          </View>
+                          <View style={styles.gridRatingPill}>
+                            <Ionicons name="star" size={11} color="#FFD700" style={{ marginRight: 3 }} />
+                            <Text style={styles.gridRatingText}>{game.rating}</Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.gridCardBottomContent}>
+                          <Text style={styles.gridGameTitle} numberOfLines={1}>
+                            {game.title}
+                          </Text>
+                          <Text style={styles.gridGameCategory} numberOfLines={1}>
+                            {game.category}
+                          </Text>
+
+                          <View style={styles.gridCardFooterRow}>
+                            <View style={styles.gridRewardChip}>
+                              <Text style={styles.gridRewardChipText}>
+                                +{game.rewardXp} XP
+                              </Text>
+                            </View>
+
+                            <TouchableOpacity
+                              style={styles.gridPlayBtn}
+                              onPress={() => handleStartGame(game)}
+                              activeOpacity={0.8}
+                            >
+                              <Ionicons name="play" size={11} color="#39FF14" style={{ marginRight: 3 }} />
+                              <Text style={styles.gridPlayBtnText}>PLAY</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              </View>
+            </ScrollView>
+          ) : activeTab === 'quests' ? (
+            <ScrollView
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scrollContent}
+            >
+              <View style={styles.dashboardContainer}>
+                {/* Header Bar with Back Button */}
+                <View style={styles.tabSubHeaderRow}>
+                  <PixoBackButton
+                    onPress={() => NavigationService.goBack()}
+                    label="DASHBOARD"
+                    variant="pill"
+                    size={14}
+                    accessibilityLabel="Back to Dashboard"
+                  />
+                  <View style={styles.tabBadge}>
+                    <Ionicons name="locate" size={14} color="#00E5FF" style={{ marginRight: 6 }} />
+                    <Text style={[styles.tabBadgeText, { color: '#00E5FF' }]}>PIXO // DAILY QUESTS</Text>
+                  </View>
+                </View>
+
+                <Text style={styles.pageHeadingText}>DAILY OBJECTIVES & REWARDS</Text>
+                <Text style={styles.pageSubHeadingText}>
+                  Complete all daily missions to earn bonus XP and PIXO Coins. Streaks reset every 24 hours at midnight UTC.
+                </Text>
+
+                {/* Reset Banner */}
+                <View style={styles.questResetCard}>
+                  <Ionicons name="timer-outline" size={20} color="#FFD700" style={{ marginRight: 8 }} />
+                  <Text style={styles.questResetCardText}>
+                    Daily Objectives refresh in: <Text style={{ color: '#FFD700', fontWeight: '800' }}>{resetCountdown}</Text>
+                  </Text>
+                </View>
+
+                {/* Quests Detailed List */}
+                <View style={styles.questsDetailedList}>
+                  {displayQuests.map((quest) => {
+                    const isComplete = quest.current >= quest.target;
+                    const isClaimed = quest.claimed;
+                    const progressPercent = Math.min(100, Math.round((quest.current / quest.target) * 100));
+
+                    return (
+                      <View key={quest.id} style={styles.questDetailedCard}>
+                        <View style={styles.questTopLine}>
+                          <View style={styles.questIconBadge}>
+                            <Ionicons
+                              name={quest.icon === 'trophy' ? 'trophy' : quest.icon === 'trending-up' ? 'trending-up' : 'ribbon'}
+                              size={20}
+                              color="#FFD700"
+                            />
+                          </View>
+                          <View style={styles.questInfoCol}>
+                            <Text style={styles.questCardTitle}>{quest.title}</Text>
+                            <Text style={styles.questCardDesc}>{quest.desc}</Text>
+                          </View>
+                          <View style={styles.questBountyCol}>
+                            <Text style={styles.questXpBadge}>+{quest.rewardXp} XP</Text>
+                            <Text style={styles.questCoinBadge}>+{quest.rewardCoins} Coins</Text>
+                          </View>
+                        </View>
+
+                        <View style={styles.questProgressRow}>
+                          <View style={styles.questProgressBar}>
+                            <View style={[styles.questProgressFill, { width: `${progressPercent}%` }]} />
+                          </View>
+                          <Text style={styles.questProgressText}>{quest.current}/{quest.target}</Text>
+                        </View>
+
+                        <View style={styles.questActionRow}>
+                          {isClaimed ? (
+                            <View style={styles.objectiveClaimedBtn}>
+                              <Ionicons name="checkmark-circle" size={14} color="#39FF14" style={{ marginRight: 5 }} />
+                              <Text style={styles.objectiveClaimedText}>CLAIMED</Text>
+                            </View>
+                          ) : isComplete ? (
+                            <TouchableOpacity
+                              style={styles.objectiveClaimReadyBtn}
+                              onPress={() => handleClaimDailyQuestReward(quest.id)}
+                              activeOpacity={0.8}
+                            >
+                              <LinearGradient
+                                colors={['#39FF14', '#00E5FF']}
+                                start={{ x: 0, y: 0 }}
+                                end={{ x: 1, y: 0 }}
+                                style={styles.objectiveClaimGradient}
+                              >
+                                <Ionicons name="gift" size={14} color="#050705" style={{ marginRight: 5 }} />
+                                <Text style={styles.objectiveClaimReadyText}>CLAIM REWARD</Text>
+                              </LinearGradient>
+                            </TouchableOpacity>
+                          ) : (
+                            <TouchableOpacity
+                              style={styles.objectiveLockedClaimBtn}
+                              onPress={() => {
+                                Alert.alert(
+                                  'Quest In Progress',
+                                  `Progress: ${quest.current}/${quest.target}. Play matches to complete!`
+                                );
+                              }}
+                              activeOpacity={0.85}
+                            >
+                              <Text style={styles.objectiveLockedClaimText}>IN PROGRESS</Text>
+                            </TouchableOpacity>
+                          )}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            </ScrollView>
           ) : (
             <ScrollView
               showsVerticalScrollIndicator={false}
@@ -702,7 +1009,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                       style={styles.streakRewardCol}
                       onPress={() => {
                         if (isStreakBroken) setIsRestoreModalOpen(true);
-                        else setActiveTab('store');
+                        else handleNavigate('store');
                       }}
                       activeOpacity={0.8}
                     >
@@ -724,7 +1031,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                   {/* PLAY GAME BUTTON */}
                   <TouchableOpacity
                     style={styles.quickPlayButton}
-                    onPress={() => setIsTargetGameOpen(true)}
+                    onPress={() => handleNavigate('games')}
                     activeOpacity={0.85}
                   >
                     <LinearGradient
@@ -749,7 +1056,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                   {/* COIN STORE BUTTON */}
                   <TouchableOpacity
                     style={styles.quickStoreButton}
-                    onPress={() => setActiveTab('store')}
+                    onPress={() => handleNavigate('store')}
                     activeOpacity={0.85}
                   >
                     <LinearGradient
@@ -854,12 +1161,8 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                       <Text style={styles.sectionTitleText}>Daily Objectives & Rewards</Text>
                     </View>
                     <TouchableOpacity
-                      onPress={() =>
-                        Alert.alert(
-                          'Daily Objectives & Rewards',
-                          `Resets in ${resetCountdown}.\nComplete daily activities to earn XP and Coins!`
-                        )
-                      }
+                      onPress={() => handleNavigate('quests')}
+                      activeOpacity={0.8}
                     >
                       <Text style={styles.viewAllText}>View All →</Text>
                     </TouchableOpacity>
@@ -1168,10 +1471,10 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           {/* 11. BOTTOM FLOATING DOCK NAVIGATION                       */}
           {/* ========================================================= */}
           <View style={styles.bottomNavDock}>
-            {/* Home Tab (Active) */}
+            {/* Home Tab */}
             <TouchableOpacity
               style={styles.navItem}
-              onPress={() => setActiveTab('home')}
+              onPress={() => handleNavigate('home')}
               activeOpacity={0.75}
             >
               <Ionicons
@@ -1188,26 +1491,24 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
             {/* Games Tab */}
             <TouchableOpacity
               style={styles.navItem}
-              onPress={() => {
-                setActiveTab('home');
-                setIsTargetGameOpen(true);
-              }}
+              onPress={() => handleNavigate('games')}
               activeOpacity={0.75}
             >
               <Ionicons
-                name="game-controller-outline"
+                name={activeTab === 'games' ? 'game-controller' : 'game-controller-outline'}
                 size={21}
                 color={activeTab === 'games' ? '#39FF14' : '#8A9E8D'}
               />
               <Text style={[styles.navText, activeTab === 'games' && styles.navTextActive]}>
                 Games
               </Text>
+              {activeTab === 'games' && <View style={styles.activePillIndicator} />}
             </TouchableOpacity>
 
             {/* Quests Tab */}
             <TouchableOpacity
               style={styles.navItem}
-              onPress={() => setActiveTab('quests')}
+              onPress={() => handleNavigate('quests')}
               activeOpacity={0.75}
             >
               <Ionicons
@@ -1218,12 +1519,13 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               <Text style={[styles.navText, activeTab === 'quests' && styles.navTextActive]}>
                 Quests
               </Text>
+              {activeTab === 'quests' && <View style={styles.activePillIndicator} />}
             </TouchableOpacity>
 
             {/* Store Tab */}
             <TouchableOpacity
               style={styles.navItem}
-              onPress={() => setActiveTab('store')}
+              onPress={() => handleNavigate('store')}
               activeOpacity={0.75}
             >
               <Ionicons
@@ -1234,12 +1536,13 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               <Text style={[styles.navText, activeTab === 'store' && styles.navTextActive]}>
                 Store
               </Text>
+              {activeTab === 'store' && <View style={styles.activePillIndicator} />}
             </TouchableOpacity>
 
             {/* Profile Tab */}
             <TouchableOpacity
               style={styles.navItem}
-              onPress={() => setActiveTab('profile')}
+              onPress={() => handleNavigate('profile')}
               activeOpacity={0.75}
             >
               <Ionicons
@@ -1250,6 +1553,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
               <Text style={[styles.navText, activeTab === 'profile' && styles.navTextActive]}>
                 Profile
               </Text>
+              {activeTab === 'profile' && <View style={styles.activePillIndicator} />}
             </TouchableOpacity>
           </View>
         </View>
@@ -1314,6 +1618,15 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           return { success: false, error: 'Restore service unavailable' };
         }}
       />
+      {/* Root Dashboard Application Exit Confirmation Modal */}
+      <PixoExitConfirmModal
+        visible={isExitConfirmVisible}
+        onDismiss={() => setIsExitConfirmVisible(false)}
+        onConfirmExit={() => {
+          setIsExitConfirmVisible(false);
+          NavigationService.exitApp();
+        }}
+      />
     </GlowingBackground>
   );
 };
@@ -1343,6 +1656,146 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
     paddingHorizontal: 14,
     paddingTop: 8,
+  },
+
+  tabSubHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+    paddingTop: 4,
+  },
+  tabBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.08)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.25)',
+  },
+  tabBadgeText: {
+    color: '#39FF14',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+  },
+  pageHeadingText: {
+    fontSize: 20,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: 0.6,
+    marginBottom: 4,
+    ...(Platform.OS === 'web' ? { fontFamily: "'Space Grotesk', sans-serif" } : {}),
+  },
+  pageSubHeadingText: {
+    fontSize: 12,
+    color: '#8A9E8D',
+    lineHeight: 17,
+    marginBottom: 16,
+  },
+  questResetCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 215, 0, 0.08)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.25)',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 16,
+  },
+  questResetCardText: {
+    fontSize: 12,
+    color: '#F0F6F0',
+    fontWeight: '600',
+  },
+  questsDetailedList: {
+    gap: 12,
+    marginBottom: 24,
+  },
+  questDetailedCard: {
+    backgroundColor: 'rgba(10, 20, 14, 0.9)',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.18)',
+    padding: 14,
+  },
+  questTopLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  questIconBadge: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: 'rgba(255, 215, 0, 0.12)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  questInfoCol: {
+    flex: 1,
+  },
+  questCardTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#FFFFFF',
+    marginBottom: 2,
+  },
+  questCardDesc: {
+    fontSize: 11,
+    color: '#8A9E8D',
+  },
+  questBountyCol: {
+    alignItems: 'flex-end',
+    gap: 4,
+  },
+  questXpBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#00E5FF',
+    backgroundColor: 'rgba(0, 229, 255, 0.1)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  questCoinBadge: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#FFD700',
+    backgroundColor: 'rgba(255, 215, 0, 0.1)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  questProgressRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 10,
+  },
+  questProgressBar: {
+    flex: 1,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    overflow: 'hidden',
+  },
+  questProgressFill: {
+    height: '100%',
+    backgroundColor: '#39FF14',
+    borderRadius: 3,
+  },
+  questProgressText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#8A9E8D',
+  },
+  questActionRow: {
+    alignItems: 'flex-end',
   },
 
   // 1. TOP HEADER APP BAR

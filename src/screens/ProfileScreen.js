@@ -21,6 +21,8 @@ import { CompletionReportModal } from '../components/profile/CompletionReportMod
 import { MonthlyGamingReport } from '../components/profile/MonthlyGamingReport';
 import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunnerModal';
 import { GamingActivityService } from '../services/gamingActivityService';
+import { NavigationService } from '../services/navigationService';
+import { PixoBackButton } from '../components/common/PixoBackButton';
 import { useAuth } from '../context/AuthContext';
 import { colors, spacing, borderRadius } from '../theme';
 
@@ -40,6 +42,21 @@ export const ProfileScreen = ({
   // Active modals
   const [selectedCompletionReport, setSelectedCompletionReport] = useState(null);
   const [resumeSessionModal, setResumeSessionModal] = useState(null);
+
+  // Register modal back interceptor for completion report modal
+  useEffect(() => {
+    if (selectedCompletionReport) {
+      const unregister = NavigationService.registerBackHandler(
+        'profile_completion_report_modal',
+        () => {
+          setSelectedCompletionReport(null);
+          return true;
+        },
+        55
+      );
+      return unregister;
+    }
+  }, [selectedCompletionReport]);
 
   // Fetch all user gaming activity records
   const loadProfileData = useCallback(async () => {
@@ -88,14 +105,16 @@ export const ProfileScreen = ({
       >
         {/* Top App Bar Navigation & Profile Eyebrow */}
         <View style={styles.topBar}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={onNavigateHome}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="arrow-back" size={18} color={colors.primaryText} style={{ marginRight: 6 }} />
-            <Text style={styles.backButtonText}>DASHBOARD</Text>
-          </TouchableOpacity>
+          <PixoBackButton
+            onPress={() => {
+              if (onNavigateHome) onNavigateHome();
+              else NavigationService.goBack();
+            }}
+            label="DASHBOARD"
+            variant="pill"
+            size={15}
+            accessibilityLabel="Navigate back to Dashboard"
+          />
 
           <View style={styles.commandCenterBadge}>
             <View style={styles.greenOnlineDot} />

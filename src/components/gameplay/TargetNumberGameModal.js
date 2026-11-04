@@ -19,6 +19,8 @@ import { colors, spacing, borderRadius } from '../../theme';
 import { useAuth } from '../../context/AuthContext';
 import { GamingActivityService } from '../../services/gamingActivityService';
 import { GamePersistenceService } from '../../services/gamePersistenceService';
+import { PixoBackButton, PixoPauseModal } from '../common';
+import { NavigationService } from '../../services/navigationService';
 
 // Operator definitions
 const OPERATORS = [
@@ -219,6 +221,8 @@ export const TargetNumberGameModal = ({
   const [selectedOperator, setSelectedOperator] = useState('+');
   const [currentLevel, setCurrentLevel] = useState(initialLevel || 1);
   const [unlockedLevels, setUnlockedLevels] = useState({ '+': 1, '-': 1, '*': 1, '%': 1 });
+  const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
+  const frozenTimeLeftRef = useRef(30);
 
   // Sync currentLevel when initialLevel changes or modal opens
   useEffect(() => {
@@ -735,6 +739,94 @@ export const TargetNumberGameModal = ({
     onClose();
   }, [gameState, onClose, user?.id]);
 
+  // Handle Pause Menu Trigger (Back button during active gameplay)
+  const handlePauseGame = useCallback(() => {
+    if (gameState !== 'playing') return;
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    const remaining = endTimeRef.current
+      ? Math.max(1, Math.ceil((endTimeRef.current - Date.now()) / 1000))
+      : (timeLeft || 30);
+    frozenTimeLeftRef.current = remaining;
+    setTimeLeft(remaining);
+    endTimeRef.current = null; // stop countdown while paused
+
+    setIsPauseModalOpen(true);
+  }, [gameState, timeLeft]);
+
+  // Handle Resume Game from Pause Menu
+  const handleResumeGame = useCallback(() => {
+    const remaining = Math.max(1, frozenTimeLeftRef.current || 1);
+    const newEndTime = Date.now() + remaining * 1000;
+    endTimeRef.current = newEndTime;
+
+    // Update active session in storage with new endTime
+    GamePersistenceService.updateActiveSession(user?.id, {
+      endTime: newEndTime,
+      timeLeft: remaining,
+    });
+
+    setIsPauseModalOpen(false);
+  }, [user?.id]);
+
+  // Handle Exit Game from Pause Menu (with cloud session save)
+  const handleExitGame = useCallback(async () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    // Save unfinished session so player can resume exact questions later
+    await GamePersistenceService.updateActiveSession(user?.id, {
+      status: 'in_progress',
+      currentProblemIdx,
+      score,
+      combo,
+      timeLeft: frozenTimeLeftRef.current,
+      userInput: userInputRef.current,
+      answersHistory: answersHistoryRef.current,
+      endedAt: null,
+    });
+
+    setIsPauseModalOpen(false);
+    setGameState('select_mode'); // Return to Level Selection screen
+  }, [user?.id, currentProblemIdx, score, combo]);
+
+  // Centralized Navigation Back Handler registration
+  useEffect(() => {
+    if (!visible) return;
+
+    const unregister = NavigationService.registerBackHandler(
+      'target_number_game_modal',
+      () => {
+        if (isPauseModalOpen) {
+          // Absorb back while pause menu is active
+          return true;
+        }
+        if (gameState === 'playing') {
+          handlePauseGame();
+          return true;
+        }
+        if (gameState === 'level_complete' || gameState === 'game_over') {
+          handleBackToMenu();
+          return true;
+        }
+        if (gameState === 'select_mode') {
+          handleModalClose();
+          return true;
+        }
+        return false;
+      },
+      80
+    );
+
+    return unregister;
+  }, [visible, gameState, isPauseModalOpen, handlePauseGame, handleBackToMenu, handleModalClose]);
+
   // Web: lock background page scrolling when modal is open
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -818,19 +910,44 @@ export const TargetNumberGameModal = ({
           >
             {/* Top Game Bar — Fixed at top, never scrolls away */}
             <View style={styles.topGameBar}>
-              <View style={styles.gameTitleWrap}>
-                <View style={styles.gameIconBadge}>
-                  <Ionicons name="calculator" size={20} color="#39FF14" />
-                </View>
-                <View>
-                  <Text style={styles.gameModalTitle}>TARGET NUMBER</Text>
-                  <Text style={styles.gameModalSub}>30-SECOND CALCULATION RUSH</Text>
+              <View style={styles.headerLeftGroup}>
+                <PixoBackButton
+                  onPress={() => {
+                    if (gameState === 'playing') {
+                      handlePauseGame();
+                    } else if (gameState === 'level_complete' || gameState === 'game_over') {
+                      handleBackToMenu();
+                    } else {
+                      handleModalClose();
+                    }
+                  }}
+                  variant="circle"
+                  size={18}
+                  style={styles.modalBackArrow}
+                  accessibilityLabel="Back to previous screen"
+                />
+                <View style={styles.gameTitleWrap}>
+                  <View style={styles.gameIconBadge}>
+                    <Ionicons name="calculator" size={20} color="#39FF14" />
+                  </View>
+                  <View>
+                    <Text style={styles.gameModalTitle}>TARGET NUMBER</Text>
+                    <Text style={styles.gameModalSub}>
+                      {gameState === 'playing' ? `LEVEL ${currentLevel} • 30s RUSH` : '30-SECOND CALCULATION RUSH'}
+                    </Text>
+                  </View>
                 </View>
               </View>
 
               <TouchableOpacity
                 style={styles.closeBtn}
-                onPress={handleModalClose}
+                onPress={() => {
+                  if (gameState === 'playing') {
+                    handlePauseGame();
+                  } else {
+                    handleModalClose();
+                  }
+                }}
                 activeOpacity={0.7}
                 accessibilityLabel="Close modal"
               >
@@ -1281,6 +1398,19 @@ export const TargetNumberGameModal = ({
                 </View>
               </View>
             )}
+
+            {/* Pixo Pause Menu Modal */}
+            <PixoPauseModal
+              visible={isPauseModalOpen}
+              gameTitle={`TARGET NUMBER: LEVEL ${currentLevel} (${selectedOperator})`}
+              level={currentLevel}
+              timeLeft={frozenTimeLeftRef.current || timeLeft}
+              score={score}
+              currentQuestion={currentProblemIdx + 1}
+              totalQuestions={currentLevelConfig.totalQuestions}
+              onResume={handleResumeGame}
+              onExit={handleExitGame}
+            />
           </LinearGradient>
         </View>
       </View>
@@ -1354,9 +1484,21 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     marginBottom: 12,
   },
+  headerLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  modalBackArrow: {
+    marginRight: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
   gameTitleWrap: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
   },
   gameIconBadge: {
     width: 38,

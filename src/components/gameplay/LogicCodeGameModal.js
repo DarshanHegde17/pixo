@@ -25,6 +25,8 @@ import {
   LOGIC_CODE_BADGES,
 } from '../../services/logicCodePersistenceService';
 import { useAuth } from '../../context/AuthContext';
+import { PixoBackButton, PixoPauseModal } from '../common';
+import { NavigationService } from '../../services/navigationService';
 
 export const LogicCodeGameModal = ({
   visible,
@@ -49,6 +51,8 @@ export const LogicCodeGameModal = ({
   // Active Gameplay State
   const [questions, setQuestions] = useState([]);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
+  const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
+  const frozenTimeLeftRef = useRef(45);
   const [userSelection, setUserSelection] = useState(null); // For multiple choice / classification
   const [placedOperators, setPlacedOperators] = useState([]); // For missing operator [box0, box1, ...]
   const [activeBoxIdx, setActiveBoxIdx] = useState(0); // Focused operator box
@@ -379,6 +383,88 @@ export const LogicCodeGameModal = ({
     onClose();
   }, [screen, user?.id, questions, currentQuestionIdx, selectedLevel, selectedCategory, score, earnedXp, correctCount, answersHistory, onClose]);
 
+  // Handle Pause Mission (Back button during active gameplay)
+  const handlePauseMission = useCallback(() => {
+    if (screen !== 'playing') return;
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    frozenTimeLeftRef.current = timeLeft || 45;
+    setIsPauseModalOpen(true);
+  }, [screen, timeLeft]);
+
+  // Handle Resume Mission
+  const handleResumeMission = useCallback(() => {
+    setIsPauseModalOpen(false);
+  }, []);
+
+  // Handle Exit Mission (Save unfinished session and return to levels screen)
+  const handleExitMission = useCallback(async () => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    if (user?.id) {
+      await LogicCodePersistenceService.saveActiveSession(user.id, {
+        level: selectedLevel,
+        category: selectedCategory.id,
+        questions,
+        currentQuestionIdx,
+        score,
+        earnedXp,
+        correctCount,
+        answersHistory,
+        status: 'in_progress',
+      });
+    }
+
+    setIsPauseModalOpen(false);
+    setScreen('category_levels');
+  }, [user?.id, selectedLevel, selectedCategory, questions, currentQuestionIdx, score, earnedXp, correctCount, answersHistory]);
+
+  // Centralized Navigation Back Handler registration for Logic Code
+  useEffect(() => {
+    if (!visible) return;
+
+    const unregister = NavigationService.registerBackHandler(
+      'logic_code_game_modal',
+      () => {
+        if (isPauseModalOpen) {
+          // Absorb back while pause menu is active
+          return true;
+        }
+        if (screen === 'playing') {
+          handlePauseMission();
+          return true;
+        }
+        if (screen === 'category_levels') {
+          setScreen('dashboard');
+          return true;
+        }
+        if (screen === 'progress_dashboard') {
+          setScreen('dashboard');
+          return true;
+        }
+        if (screen === 'level_complete') {
+          setScreen('category_levels');
+          return true;
+        }
+        if (screen === 'dashboard') {
+          handleModalClose();
+          return true;
+        }
+        return false;
+      },
+      80
+    );
+
+    return unregister;
+  }, [visible, screen, isPauseModalOpen, handlePauseMission, handleModalClose]);
+
   if (!visible) return null;
 
   const currentQ = questions[currentQuestionIdx];
@@ -396,13 +482,34 @@ export const LogicCodeGameModal = ({
             {/* TOP HEADER BAR (Always visible & fixed)                */}
             {/* ======================================================= */}
             <View style={styles.topHeaderBar}>
-              <View style={styles.headerTitleWrap}>
-                <View style={styles.brandBadge}>
-                  <Ionicons name="hardware-chip-outline" size={18} color="#39FF14" />
-                </View>
-                <View>
-                  <Text style={styles.parentGameLabel}>CYBER STRIKE: 2099</Text>
-                  <Text style={styles.mainGameTitle}>LOGIC CODE</Text>
+              <View style={styles.headerLeftGroup}>
+                <PixoBackButton
+                  onPress={() => {
+                    if (screen === 'playing') {
+                      handlePauseMission();
+                    } else if (screen === 'category_levels' || screen === 'progress_dashboard') {
+                      setScreen('dashboard');
+                    } else if (screen === 'level_complete') {
+                      setScreen('category_levels');
+                    } else {
+                      handleModalClose();
+                    }
+                  }}
+                  variant="circle"
+                  size={18}
+                  style={styles.modalBackArrow}
+                  accessibilityLabel="Back to previous screen"
+                />
+                <View style={styles.headerTitleWrap}>
+                  <View style={styles.brandBadge}>
+                    <Ionicons name="hardware-chip-outline" size={18} color="#39FF14" />
+                  </View>
+                  <View>
+                    <Text style={styles.parentGameLabel}>CYBER STRIKE: 2099</Text>
+                    <Text style={styles.mainGameTitle}>
+                      {screen === 'playing' ? `LOGIC CODE • LEVEL ${selectedLevel}` : 'LOGIC CODE'}
+                    </Text>
+                  </View>
                 </View>
               </View>
 
@@ -412,10 +519,7 @@ export const LogicCodeGameModal = ({
                     style={styles.headerPillBtn}
                     onPress={() => {
                       if (screen === 'playing') {
-                        Alert.alert('Pause Mission', 'Your level progress has been saved. Exit to main dashboard?', [
-                          { text: 'Resume', style: 'cancel' },
-                          { text: 'Exit to Hub', onPress: () => setScreen('dashboard') },
-                        ]);
+                        handlePauseMission();
                       } else {
                         setScreen('dashboard');
                       }
@@ -434,7 +538,17 @@ export const LogicCodeGameModal = ({
                   <Text style={[styles.headerPillText, screen === 'progress_dashboard' && { color: '#050705' }]}>STATS</Text>
                 </TouchableOpacity>
 
-                <TouchableOpacity style={styles.closeBtn} onPress={handleModalClose}>
+                <TouchableOpacity
+                  style={styles.closeBtn}
+                  onPress={() => {
+                    if (screen === 'playing') {
+                      handlePauseMission();
+                    } else {
+                      handleModalClose();
+                    }
+                  }}
+                  accessibilityLabel="Close game"
+                >
                   <Ionicons name="close" size={20} color={colors.textSecondary} />
                 </TouchableOpacity>
               </View>
@@ -1125,6 +1239,19 @@ export const LogicCodeGameModal = ({
                 </View>
               </ScrollView>
             )}
+
+            {/* Pixo Mission Pause Menu Modal */}
+            <PixoPauseModal
+              visible={isPauseModalOpen}
+              gameTitle={`CYBER STRIKE: LEVEL ${selectedLevel} (${selectedCategory?.title || 'Tactical'})`}
+              level={selectedLevel}
+              timeLeft={frozenTimeLeftRef.current || timeLeft}
+              score={score}
+              currentQuestion={currentQuestionIdx + 1}
+              totalQuestions={questions.length || 5}
+              onResume={handleResumeMission}
+              onExit={handleExitMission}
+            />
           </LinearGradient>
         </View>
       </View>
@@ -1220,9 +1347,21 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     marginBottom: 12,
   },
+  headerLeftGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  modalBackArrow: {
+    marginRight: 10,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+  },
   headerTitleWrap: {
     flexDirection: 'row',
     alignItems: 'center',
+    flex: 1,
   },
   brandBadge: {
     width: 38,

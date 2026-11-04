@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Modal,
   View,
@@ -12,6 +12,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, borderRadius } from '../../theme';
+import { NavigationService } from '../../services/navigationService';
 
 /**
  * PIXO Restore Streak Confirmation Modal
@@ -38,6 +39,21 @@ export const RestoreStreakModal = ({
   const isMobile = width < 520;
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState(null);
+
+  // Centralized Navigation Back Interceptor
+  useEffect(() => {
+    if (visible) {
+      const unregister = NavigationService.registerBackHandler(
+        'restore_streak_modal',
+        () => {
+          onClose();
+          return true;
+        },
+        55
+      );
+      return unregister;
+    }
+  }, [visible, onClose]);
 
   if (!visible) return null;
 
