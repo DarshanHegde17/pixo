@@ -106,14 +106,11 @@ export const ProfileScreen = ({
         {/* Top App Bar Navigation & Profile Eyebrow */}
         <View style={styles.topBar}>
           <PixoBackButton
-            onPress={() => {
-              if (onNavigateHome) onNavigateHome();
-              else NavigationService.goBack();
-            }}
-            label="DASHBOARD"
+            onPress={() => NavigationService.goBack()}
+            label="BACK"
             variant="pill"
             size={15}
-            accessibilityLabel="Navigate back to Dashboard"
+            accessibilityLabel="Navigate back to previous page"
           />
 
           <View style={styles.commandCenterBadge}>

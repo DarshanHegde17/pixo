@@ -1,28 +1,27 @@
+import { useState, useEffect, useCallback } from 'react';
 import { Platform, BackHandler } from 'react-native';
 
 /**
  * PIXO Centralized Global Navigation Service
  * 
- * Handles back navigation across:
- * 1. Mobile browsers (Chrome, Safari, Firefox) via popstate
- * 2. Desktop browsers via browser Back button and history
- * 3. Android APK via hardware BackHandler
- * 4. In-app PIXO Back Arrow buttons
+ * Provides robust, professional navigation management across:
+ * 1. Mobile browsers (Chrome, Safari, Firefox, Samsung Internet) via popstate
+ * 2. Desktop browsers via browser Back and Forward buttons
+ * 3. Installed Android applications (APK) via hardware BackHandler
+ * 4. In-app visible PIXO Back Arrow on every page/subpage
  * 
- * Rules:
- * - Exactly one step backward per action.
- * - Layered priority handling:
- *     1. Confirmation popups (priority: 100)
- *     2. Active gameplay pause menu (priority: 80)
- *     3. Modals and overlays (priority: 50)
- *     4. Internal page history (priority: 10)
- *     5. Root Dashboard exit confirmation (priority: 0)
- * - State preservation across backward and forward transitions.
- * - Prevents duplicate entries and navigation loops.
+ * Guarantees:
+ * - ONE BACK PRESS = ONE PAGE BACK.
+ * - Every internal page navigation creates a valid history entry.
+ * - Supports navigate(-1) and React Router useNavigate / useLocation hooks.
+ * - Prevents accidental website exits while previous internal PIXO pages exist.
+ * - Tactical Pause Menu interception for active gameplay.
+ * - Zero infinite traps, zero duplicate entries, zero unexpected full-page reloads.
  */
 class NavigationServiceSingleton {
   constructor() {
-    this.history = [{ id: 'home', title: 'Dashboard', params: {} }];
+    this.history = [{ id: 'home', title: 'Dashboard', params: {}, index: 0, path: '/#home' }];
+    this.currentIndex = 0;
     this.handlers = []; // { id, handler: () => boolean, priority: number }
     this.subscribers = new Set();
     this.exitSubscribers = new Set();
@@ -36,39 +35,73 @@ class NavigationServiceSingleton {
     if (this.isInitialized) return;
     this.isInitialized = true;
 
-    // 1. Android Native Hardware Back Handler
+    // 1. Android Native Hardware Back Handler (Single dedicated listener)
     if (Platform.OS === 'android') {
       try {
         BackHandler.addEventListener('hardwareBackPress', () => {
           return this.goBack(false);
         });
       } catch (err) {
-        console.warn('[NavigationService] Failed to bind Android BackHandler:', err);
+        console.warn('[NavigationService] Android BackHandler listener registration warning:', err);
       }
     }
 
     // 2. Mobile Browser and Desktop Browser PopState Handler
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.history) {
       try {
-        // Initial state entry
-        if (!window.history.state || !window.history.state.pixoRoute) {
+        // Inspect initial hash or URL path
+        const rawHash = (window.location.hash || '').replace('#', '').trim();
+        const initialRoute = this.isValidRoute(rawHash) ? rawHash : 'home';
+
+        // Check if an existing PIXO session state exists in browser history
+        if (!window.history.state || typeof window.history.state.pixoIndex !== 'number') {
+          // Replace initial state with index 0 without destroying browser referrer
           window.history.replaceState(
-            { pixoRoute: 'home', depth: 1, timestamp: Date.now() },
-            '',
-            window.location.pathname + window.location.search
+            { pixoRoute: initialRoute, pixoIndex: 0, app: 'pixo' },
+            this.getRouteTitle(initialRoute),
+            window.location.pathname + (initialRoute === 'home' ? '' : `#${initialRoute}`)
           );
         }
+
+        this.history = [
+          {
+            id: initialRoute,
+            title: this.getRouteTitle(initialRoute),
+            params: {},
+            index: 0,
+            path: `/#${initialRoute}`,
+          },
+        ];
+        this.currentIndex = 0;
 
         window.addEventListener('popstate', (event) => {
           this.handleBrowserPopState(event);
         });
       } catch (err) {
-        console.warn('[NavigationService] Failed to bind Web popstate:', err);
+        console.warn('[NavigationService] Web popstate listener registration warning:', err);
       }
     }
   }
 
-  // Handle browser native Back button (or forward button)
+  isValidRoute(routeId) {
+    const valid = [
+      'home',
+      'games',
+      'quests',
+      'store',
+      'profile',
+      'target_number',
+      'target_level_select',
+      'target_gameplay',
+      'cyber_strike',
+      'cyber_strike_levels',
+      'cyber_strike_gameplay',
+      'game_details',
+    ];
+    return valid.includes(routeId);
+  }
+
+  // Handle browser native Back button or forward gesture
   handleBrowserPopState(event) {
     if (this.isHandlingPopState) return;
 
@@ -76,33 +109,80 @@ class NavigationServiceSingleton {
     try {
       const state = event.state;
 
-      // Check if any registered back interceptor (pause menu, modal, confirmation) consumes this
+      // 1. Check if any active modal, pause menu, or confirmation dialog consumes this Back press
       const intercepted = this.executeTopBackHandler();
       if (intercepted) {
-        // Re-push state so browser history index doesn't drift away from internal app state
+        // Because the mobile browser has already physically popped its URL,
+        // re-push the current route so that the browser pointer stays matched to the app state
         const currentRoute = this.getCurrentRoute();
+        const hash = currentRoute.id === 'home' ? '' : `#${currentRoute.id}`;
         window.history.pushState(
-          { pixoRoute: currentRoute.id, depth: this.history.length, timestamp: Date.now() },
-          '',
-          window.location.pathname + (currentRoute.id === 'home' ? '' : `#${currentRoute.id}`)
+          {
+            pixoRoute: currentRoute.id,
+            pixoIndex: this.currentIndex,
+            params: currentRoute.params,
+            app: 'pixo',
+          },
+          currentRoute.title,
+          window.location.pathname + hash
         );
         return;
       }
 
-      // If user navigated backward in history
-      if (this.history.length > 1) {
+      // 2. User navigated via browser Back or Forward between internal PIXO pages
+      if (state && state.app === 'pixo' && typeof state.pixoIndex === 'number') {
+        const targetIndex = state.pixoIndex;
+        const targetRoute = state.pixoRoute || 'home';
+        const targetParams = state.params || {};
+
+        this.currentIndex = targetIndex;
+        if (targetIndex < this.history.length) {
+          this.history = this.history.slice(0, targetIndex + 1);
+        } else {
+          this.history.push({
+            id: targetRoute,
+            title: this.getRouteTitle(targetRoute),
+            params: targetParams,
+            index: targetIndex,
+            path: `/#${targetRoute}`,
+          });
+        }
+
+        this.notifySubscribers(this.getCurrentRoute());
+        return;
+      }
+
+      // 3. Popped to an entry where state.pixoIndex is not set, but internal history has previous pages
+      if (this.currentIndex > 0 && this.history.length > 1) {
+        this.currentIndex--;
         this.history.pop();
         const prev = this.history[this.history.length - 1];
-        this.notifySubscribers(prev);
-      } else {
-        // On root dashboard: re-push root state and show exit confirmation popup
-        window.history.pushState(
-          { pixoRoute: 'home', depth: 1, timestamp: Date.now() },
-          '',
-          window.location.pathname
+        
+        // Re-sync browser state
+        const hash = prev.id === 'home' ? '' : `#${prev.id}`;
+        window.history.replaceState(
+          {
+            pixoRoute: prev.id,
+            pixoIndex: this.currentIndex,
+            params: prev.params,
+            app: 'pixo',
+          },
+          prev.title,
+          window.location.pathname + hash
         );
-        this.triggerExitConfirmation();
+
+        this.notifySubscribers(prev);
+        return;
       }
+
+      // 4. On root Dashboard and there is NO previous internal PIXO page!
+      // Prevent accidental exit by re-pushing root state and displaying exit confirmation dialog
+      window.history.pushState(
+        { pixoRoute: 'home', pixoIndex: 0, app: 'pixo' },
+        'Dashboard',
+        window.location.pathname
+      );
+      this.triggerExitConfirmation();
     } finally {
       this.isHandlingPopState = false;
     }
@@ -115,25 +195,17 @@ class NavigationServiceSingleton {
    * @param {number} priority Higher numbers execute first (e.g., 100: dialog, 80: pause, 50: modal)
    */
   registerBackHandler(id, handler, priority = 50) {
-    // Remove any existing handler with same id
     this.handlers = this.handlers.filter((h) => h.id !== id);
     this.handlers.push({ id, handler, priority });
-    // Sort descending by priority
     this.handlers.sort((a, b) => b.priority - a.priority);
 
     return () => this.unregisterBackHandler(id);
   }
 
-  /**
-   * Unregister a back handler
-   */
   unregisterBackHandler(id) {
     this.handlers = this.handlers.filter((h) => h.id !== id);
   }
 
-  /**
-   * Execute the top-most registered back handler (if any returns true)
-   */
   executeTopBackHandler() {
     for (const item of this.handlers) {
       try {
@@ -149,12 +221,22 @@ class NavigationServiceSingleton {
   }
 
   /**
-   * Navigate forward to a new internal route
-   * @param {string} routeId Route identifier (e.g., 'home', 'games', 'quests', 'store', 'profile')
-   * @param {object} params Optional parameters
+   * Navigate forward to a new internal route or backward via navigate(-1)
+   * Compatible with React Router's navigate(to, options) signature
    */
-  navigate(routeId, params = {}) {
+  navigate(to, paramsOrOptions = {}) {
+    // Support navigate(-1)
+    if (typeof to === 'number') {
+      if (to === -1) {
+        return this.goBack(false);
+      }
+      return;
+    }
+
+    const routeId = to;
     if (!routeId) return;
+
+    const params = paramsOrOptions?.state || paramsOrOptions?.params || paramsOrOptions || {};
 
     const current = this.getCurrentRoute();
     // Prevent duplicate consecutive entries
@@ -164,35 +246,35 @@ class NavigationServiceSingleton {
       }
     }
 
+    // Slice forward history if navigating from an earlier index in stack
+    this.currentIndex++;
+    if (this.currentIndex <= this.history.length) {
+      this.history = this.history.slice(0, this.currentIndex);
+    }
+
     const newEntry = {
       id: routeId,
       title: this.getRouteTitle(routeId),
       params: params || {},
+      index: this.currentIndex,
+      path: `/#${routeId}`,
       timestamp: Date.now(),
     };
 
-    // If navigating to root dashboard, reset history stack to clean ['home']
-    if (routeId === 'home') {
-      this.history = [newEntry];
-    } else {
-      // Avoid looping: if route already exists in recent history, trim up to that point
-      const existingIdx = this.history.findIndex((item) => item.id === routeId);
-      if (existingIdx !== -1 && existingIdx !== this.history.length - 1) {
-        // Re-focus existing history slice
-        this.history = this.history.slice(0, existingIdx + 1);
-        this.history[existingIdx].params = params;
-      } else {
-        this.history.push(newEntry);
-      }
-    }
+    this.history.push(newEntry);
 
-    // Update browser history on Web
+    // Push valid history entry to browser
     if (Platform.OS === 'web' && typeof window !== 'undefined' && window.history && !this.isHandlingPopState) {
       try {
         const hash = routeId === 'home' ? '' : `#${routeId}`;
         window.history.pushState(
-          { pixoRoute: routeId, depth: this.history.length, timestamp: Date.now() },
-          '',
+          {
+            pixoRoute: routeId,
+            pixoIndex: this.currentIndex,
+            params,
+            app: 'pixo',
+          },
+          newEntry.title,
           window.location.pathname + hash
         );
       } catch (e) {
@@ -200,11 +282,11 @@ class NavigationServiceSingleton {
       }
     }
 
-    this.notifySubscribers(this.getCurrentRoute());
+    this.notifySubscribers(newEntry);
   }
 
   /**
-   * Replace the current route in history without pushing
+   * Replace the current route in history without pushing a new entry
    */
   replace(routeId, params = {}) {
     if (!routeId) return;
@@ -213,6 +295,8 @@ class NavigationServiceSingleton {
       id: routeId,
       title: this.getRouteTitle(routeId),
       params: params || {},
+      index: this.currentIndex,
+      path: `/#${routeId}`,
       timestamp: Date.now(),
     };
 
@@ -226,8 +310,13 @@ class NavigationServiceSingleton {
       try {
         const hash = routeId === 'home' ? '' : `#${routeId}`;
         window.history.replaceState(
-          { pixoRoute: routeId, depth: this.history.length, timestamp: Date.now() },
-          '',
+          {
+            pixoRoute: routeId,
+            pixoIndex: this.currentIndex,
+            params,
+            app: 'pixo',
+          },
+          newEntry.title,
           window.location.pathname + hash
         );
       } catch (e) {
@@ -239,19 +328,12 @@ class NavigationServiceSingleton {
   }
 
   /**
-   * Unified Global Go-Back Action
+   * Unified Global Go-Back Action (One Back Press = One Page Back)
+   * 
    * Used by:
    * 1. PIXO's visible Back Arrow on every page
    * 2. Android hardware Back button
    * 3. Browser native Back button
-   * 
-   * Order of execution:
-   * 1. Check registered modal / pause interceptors
-   * 2. If no interceptor consumed it, pop one step backward in internal history
-   * 3. If on Dashboard (history length <= 1), trigger exit confirmation
-   * 
-   * @param {boolean} fromBrowserPop Whether triggered by native popstate event
-   * @returns {boolean} True if navigation/back was handled
    */
   goBack(fromBrowserPop = false) {
     // 1. First check if any registered interceptor (confirmation, pause menu, modal) handles this
@@ -260,37 +342,29 @@ class NavigationServiceSingleton {
       return true;
     }
 
-    // 2. If inside an internal page and history depth > 1
-    if (this.history.length > 1) {
-      this.history.pop();
-      const previousRoute = this.history[this.history.length - 1];
-
-      // Sync browser history if this call was initiated by in-app Back button or Android BackHandler
+    // 2. If inside an internal page and a previous internal PIXO route exists
+    if (this.currentIndex > 0 && this.history.length > 1) {
+      // In mobile browser, trigger window.history.back() so popstate event fires
+      // and keeps browser history and internal stack in 100% lockstep
       if (Platform.OS === 'web' && typeof window !== 'undefined' && window.history && !fromBrowserPop) {
-        try {
-          const hash = previousRoute.id === 'home' ? '' : `#${previousRoute.id}`;
-          window.history.replaceState(
-            { pixoRoute: previousRoute.id, depth: this.history.length, timestamp: Date.now() },
-            '',
-            window.location.pathname + hash
-          );
-        } catch (e) {
-          console.warn('[NavigationService] sync state failed:', e);
-        }
+        window.history.back();
+        return true;
       }
 
+      // On Android APK or non-browser fallback:
+      this.currentIndex--;
+      this.history.pop();
+      const previousRoute = this.history[this.history.length - 1];
       this.notifySubscribers(previousRoute);
       return true;
     }
 
-    // 3. At root Dashboard: prompt application exit confirmation
+    // 3. At root Dashboard (no previous internal route):
+    // DO NOT blindly call history.back() when there is no previous internal route!
     this.triggerExitConfirmation();
     return true; // Return true to tell Android BackHandler not to abruptly kill process
   }
 
-  /**
-   * Trigger root dashboard exit confirmation popup
-   */
   triggerExitConfirmation() {
     for (const listener of this.exitSubscribers) {
       try {
@@ -301,9 +375,6 @@ class NavigationServiceSingleton {
     }
   }
 
-  /**
-   * Actually exit the application (called when user confirms Exit on Android)
-   */
   exitApp() {
     if (Platform.OS === 'android') {
       try {
@@ -312,16 +383,10 @@ class NavigationServiceSingleton {
         console.warn('[NavigationService] BackHandler.exitApp() failed:', err);
       }
     } else if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      // In web browser, cannot force close window if not opened by script; prompt friendly message
       alert('Thank you for playing PIXO! You may close this browser tab.');
     }
   }
 
-  /**
-   * Subscribe to route changes
-   * @param {function} callback Called with current route on navigation
-   * @returns {function} Unsubscribe function
-   */
   subscribe(callback) {
     this.subscribers.add(callback);
     return () => {
@@ -329,11 +394,6 @@ class NavigationServiceSingleton {
     };
   }
 
-  /**
-   * Subscribe to root dashboard exit requests
-   * @param {function} callback Called when user presses Back on root Dashboard
-   * @returns {function} Unsubscribe function
-   */
   onExitRequest(callback) {
     this.exitSubscribers.add(callback);
     return () => {
@@ -352,7 +412,7 @@ class NavigationServiceSingleton {
   }
 
   getCurrentRoute() {
-    return this.history[this.history.length - 1] || { id: 'home', title: 'Dashboard', params: {} };
+    return this.history[this.history.length - 1] || { id: 'home', title: 'Dashboard', params: {}, index: 0 };
   }
 
   getHistoryDepth() {
@@ -367,7 +427,7 @@ class NavigationServiceSingleton {
   }
 
   canGoBack() {
-    return this.history.length > 1;
+    return this.currentIndex > 0 && this.history.length > 1;
   }
 
   getRouteTitle(routeId) {
@@ -383,9 +443,19 @@ class NavigationServiceSingleton {
       case 'profile':
         return 'Player Profile';
       case 'target_number':
-        return 'Target Number';
-      case 'logic_code':
-        return 'Cyber Strike: Logic Code';
+        return 'Target Number (Speed Math)';
+      case 'target_level_select':
+        return 'Target Number • Level Selection';
+      case 'target_gameplay':
+        return 'Target Number • Gameplay Arena';
+      case 'cyber_strike':
+        return 'Cyber Strike: 2099';
+      case 'cyber_strike_levels':
+        return 'Cyber Strike • Category Levels';
+      case 'cyber_strike_gameplay':
+        return 'Cyber Strike • Mission Gameplay';
+      case 'game_details':
+        return 'Game Details';
       default:
         return 'PIXO';
     }
@@ -393,4 +463,46 @@ class NavigationServiceSingleton {
 }
 
 export const NavigationService = new NavigationServiceSingleton();
+
+/**
+ * React Router compatibility hook: useNavigate
+ * Usage:
+ *   const navigate = useNavigate();
+ *   navigate(-1); // Go back one internal step
+ *   navigate('games'); // Go to Games
+ *   navigate('target_number'); // Go to Target Number
+ */
+export function useNavigate() {
+  return useCallback((to, options) => {
+    if (typeof to === 'number') {
+      if (to === -1) {
+        return NavigationService.goBack(false);
+      }
+      return;
+    }
+    NavigationService.navigate(to, options?.state || options?.params);
+  }, []);
+}
+
+/**
+ * React Router compatibility hook: useLocation
+ * Usage:
+ *   const location = useLocation();
+ *   console.log(location.pathname, location.state);
+ */
+export function useLocation() {
+  const [currentRoute, setCurrentRoute] = useState(() => NavigationService.getCurrentRoute());
+  useEffect(() => {
+    return NavigationService.subscribe((route) => {
+      setCurrentRoute(route);
+    });
+  }, []);
+  return {
+    pathname: currentRoute.path || `/${currentRoute.id}`,
+    hash: `#${currentRoute.id}`,
+    state: currentRoute.params,
+    key: String(currentRoute.index || 0),
+  };
+}
+
 export default NavigationService;

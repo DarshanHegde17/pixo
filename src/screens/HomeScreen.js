@@ -290,6 +290,18 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       if (route && route.id) {
         if (['home', 'games', 'quests', 'store', 'profile'].includes(route.id)) {
           setActiveTab(route.id);
+          setIsTargetGameOpen(false);
+          setIsLogicCodeOpen(false);
+          setSelectedGameModal(null);
+        } else if (['target_number', 'target_level_select', 'target_gameplay'].includes(route.id)) {
+          setActiveTab('games');
+          setIsTargetGameOpen(true);
+        } else if (['cyber_strike', 'cyber_strike_levels', 'cyber_strike_gameplay'].includes(route.id)) {
+          setActiveTab('games');
+          setIsLogicCodeOpen(true);
+        } else if (route.id === 'game_details') {
+          setActiveTab('games');
+          setSelectedGameModal(route.params?.game || ALL_GAMES[0]);
         }
       }
     });
@@ -434,7 +446,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       game?.title?.toLowerCase().includes('cyber strike') ||
       game?.title?.toLowerCase().includes('logic code')
     ) {
-      setIsLogicCodeOpen(true);
+      NavigationService.navigate('cyber_strike');
       return;
     }
     if (
@@ -442,10 +454,10 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       game?.isTargetGame ||
       game?.title?.toLowerCase().includes('target')
     ) {
-      setIsTargetGameOpen(true);
+      NavigationService.navigate('target_number');
       return;
     }
-    setLiveSessionGame(game);
+    NavigationService.navigate('game_details', { game });
   };
 
   // Logout Handler
@@ -647,10 +659,10 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 <View style={styles.tabSubHeaderRow}>
                   <PixoBackButton
                     onPress={() => NavigationService.goBack()}
-                    label="DASHBOARD"
+                    label="BACK"
                     variant="pill"
                     size={14}
-                    accessibilityLabel="Back to Dashboard"
+                    accessibilityLabel="Back to previous page"
                   />
                   <View style={styles.tabBadge}>
                     <Ionicons name="game-controller" size={14} color="#39FF14" style={{ marginRight: 6 }} />
@@ -816,10 +828,10 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                 <View style={styles.tabSubHeaderRow}>
                   <PixoBackButton
                     onPress={() => NavigationService.goBack()}
-                    label="DASHBOARD"
+                    label="BACK"
                     variant="pill"
                     size={14}
-                    accessibilityLabel="Back to Dashboard"
+                    accessibilityLabel="Back to previous page"
                   />
                   <View style={styles.tabBadge}>
                     <Ionicons name="locate" size={14} color="#00E5FF" style={{ marginRight: 6 }} />
@@ -1563,7 +1575,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       <GameDetailsModal
         visible={!!selectedGameModal}
         game={selectedGameModal}
-        onClose={() => setSelectedGameModal(null)}
+        onClose={() => NavigationService.goBack()}
         onLaunch={handleStartGame}
       />
 

@@ -216,13 +216,35 @@ export const TargetNumberGameModal = ({
   const { width } = useWindowDimensions();
   const isMobile = width < 600;
 
-  // Game flow states: 'select_mode' | 'playing' | 'level_complete' | 'game_over'
-  const [gameState, setGameState] = useState('select_mode');
+  // Game flow states: 'game_intro' | 'select_mode' | 'playing' | 'level_complete' | 'game_over'
+  const [gameState, setGameState] = useState('game_intro');
   const [selectedOperator, setSelectedOperator] = useState('+');
   const [currentLevel, setCurrentLevel] = useState(initialLevel || 1);
   const [unlockedLevels, setUnlockedLevels] = useState({ '+': 1, '-': 1, '*': 1, '%': 1 });
   const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
   const frozenTimeLeftRef = useRef(30);
+
+  // Sync gameState with current navigation route
+  useEffect(() => {
+    if (!visible) return;
+
+    const syncWithRoute = (route) => {
+      if (!route) return;
+      if (route.id === 'target_number') {
+        setGameState('game_intro');
+      } else if (route.id === 'target_level_select') {
+        setGameState('select_mode');
+      } else if (route.id === 'target_gameplay') {
+        setGameState('playing');
+      } else if (['home', 'games', 'quests', 'store', 'profile'].includes(route.id)) {
+        if (onClose) onClose();
+      }
+    };
+
+    syncWithRoute(NavigationService.getCurrentRoute());
+    const unsub = NavigationService.subscribe(syncWithRoute);
+    return unsub;
+  }, [visible, onClose]);
 
   // Sync currentLevel when initialLevel changes or modal opens
   useEffect(() => {
@@ -725,6 +747,7 @@ export const TargetNumberGameModal = ({
     await GamePersistenceService.clearActiveSession(user?.id);
     sessionIdRef.current = null;
     endTimeRef.current = null;
+    NavigationService.navigate('target_level_select');
     setGameState('select_mode');
   }, [user?.id]);
 
@@ -793,7 +816,7 @@ export const TargetNumberGameModal = ({
     });
 
     setIsPauseModalOpen(false);
-    setGameState('select_mode'); // Return to Level Selection screen
+    NavigationService.goBack();
   }, [user?.id, currentProblemIdx, score, combo]);
 
   // Centralized Navigation Back Handler registration
@@ -811,21 +834,13 @@ export const TargetNumberGameModal = ({
           handlePauseGame();
           return true;
         }
-        if (gameState === 'level_complete' || gameState === 'game_over') {
-          handleBackToMenu();
-          return true;
-        }
-        if (gameState === 'select_mode') {
-          handleModalClose();
-          return true;
-        }
         return false;
       },
       80
     );
 
     return unregister;
-  }, [visible, gameState, isPauseModalOpen, handlePauseGame, handleBackToMenu, handleModalClose]);
+  }, [visible, gameState, isPauseModalOpen, handlePauseGame]);
 
   // Web: lock background page scrolling when modal is open
   useEffect(() => {
@@ -915,10 +930,8 @@ export const TargetNumberGameModal = ({
                   onPress={() => {
                     if (gameState === 'playing') {
                       handlePauseGame();
-                    } else if (gameState === 'level_complete' || gameState === 'game_over') {
-                      handleBackToMenu();
                     } else {
-                      handleModalClose();
+                      NavigationService.goBack();
                     }
                   }}
                   variant="circle"
@@ -933,7 +946,11 @@ export const TargetNumberGameModal = ({
                   <View>
                     <Text style={styles.gameModalTitle}>TARGET NUMBER</Text>
                     <Text style={styles.gameModalSub}>
-                      {gameState === 'playing' ? `LEVEL ${currentLevel} • 30s RUSH` : '30-SECOND CALCULATION RUSH'}
+                      {gameState === 'playing'
+                        ? `LEVEL ${currentLevel} • 30s RUSH`
+                        : gameState === 'select_mode'
+                        ? 'SELECT OPERATOR & LEVEL'
+                        : '30-SECOND SPEED MATH RUSH'}
                     </Text>
                   </View>
                 </View>
@@ -945,7 +962,7 @@ export const TargetNumberGameModal = ({
                   if (gameState === 'playing') {
                     handlePauseGame();
                   } else {
-                    handleModalClose();
+                    NavigationService.goBack();
                   }
                 }}
                 activeOpacity={0.7}
@@ -954,6 +971,93 @@ export const TargetNumberGameModal = ({
                 <Ionicons name="close" size={22} color={colors.textSecondary} />
               </TouchableOpacity>
             </View>
+
+            {/* SCREEN 0: TARGET NUMBER GAME OVERVIEW & INTRO */}
+            {gameState === 'game_intro' && (
+              <View style={styles.selectModeWrapper}>
+                <ScrollView
+                  style={styles.selectModeScroll}
+                  contentContainerStyle={styles.selectModeContent}
+                  showsVerticalScrollIndicator={true}
+                  nestedScrollEnabled={true}
+                >
+                  <View style={styles.introHeroCard}>
+                    <LinearGradient
+                      colors={['#0F2B17', '#08170D', '#040B06']}
+                      style={styles.introHeroGradient}
+                    >
+                      <View style={styles.introBadgeRow}>
+                        <View style={styles.introRatingBadge}>
+                          <Ionicons name="star" size={13} color="#FFD700" style={{ marginRight: 4 }} />
+                          <Text style={styles.introRatingText}>4.9 • 12.8k Reviews</Text>
+                        </View>
+                        <View style={styles.introSpeedBadge}>
+                          <Ionicons name="flash" size={13} color="#39FF14" style={{ marginRight: 4 }} />
+                          <Text style={styles.introSpeedText}>SPEED MATH RUSH</Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.introHeading}>TARGET NUMBER</Text>
+                      <Text style={styles.introSubHeading}>30-SECOND CALCULATION CHALLENGE</Text>
+                      
+                      <Text style={styles.introDescription}>
+                        Test your mental math reflexes in intense 30-second blitz rounds! Select Addition (+), Subtraction (-), Multiplication (*), or Modulus (%), unlock 10 progressive speed tiers, and earn huge battle XP and PIXO Coins.
+                      </Text>
+
+                      <View style={styles.introRewardRow}>
+                        <View style={styles.introRewardPill}>
+                          <Ionicons name="flash" size={13} color="#00E5FF" style={{ marginRight: 5 }} />
+                          <Text style={styles.introRewardText}>+50 XP Victory Bonus</Text>
+                        </View>
+                        <View style={styles.introRewardPill}>
+                          <Ionicons name="cash" size={13} color="#FFD700" style={{ marginRight: 5 }} />
+                          <Text style={styles.introRewardText}>+10 PIXO Coins</Text>
+                        </View>
+                      </View>
+                    </LinearGradient>
+                  </View>
+
+                  <View style={styles.introHighlightsGrid}>
+                    <View style={styles.introHighlightCard}>
+                      <Ionicons name="time" size={20} color="#00E5FF" style={{ marginBottom: 6 }} />
+                      <Text style={styles.introHighlightTitle}>30s Speed Clock</Text>
+                      <Text style={styles.introHighlightDesc}>Solve fast math before time runs out</Text>
+                    </View>
+                    <View style={styles.introHighlightCard}>
+                      <Ionicons name="flame" size={20} color="#FF6A00" style={{ marginBottom: 6 }} />
+                      <Text style={styles.introHighlightTitle}>Combo Boost</Text>
+                      <Text style={styles.introHighlightDesc}>Consecutive answers multiply score</Text>
+                    </View>
+                    <View style={styles.introHighlightCard}>
+                      <Ionicons name="calculator" size={20} color="#39FF14" style={{ marginBottom: 6 }} />
+                      <Text style={styles.introHighlightTitle}>4 Operators</Text>
+                      <Text style={styles.introHighlightDesc}>Addition, Subtraction, Mult & Mod</Text>
+                    </View>
+                  </View>
+                </ScrollView>
+
+                <View style={styles.modalFooter}>
+                  <TouchableOpacity
+                    style={styles.introStartBtn}
+                    onPress={() => {
+                      NavigationService.navigate('target_level_select');
+                      setGameState('select_mode');
+                    }}
+                    activeOpacity={0.85}
+                  >
+                    <LinearGradient
+                      colors={['#39FF14', '#00E5FF']}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.introStartBtnGradient}
+                    >
+                      <Text style={styles.introStartBtnText}>CHOOSE OPERATOR & LEVEL</Text>
+                      <Ionicons name="arrow-forward" size={18} color="#050705" style={{ marginLeft: 8 }} />
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
 
             {/* SCREEN 1: SELECT OPERATOR & LEVEL */}
             {gameState === 'select_mode' && (
@@ -1090,7 +1194,10 @@ export const TargetNumberGameModal = ({
                     return (
                       <TouchableOpacity
                         style={styles.startGameBtn}
-                        onPress={() => startLevel(currentLevel, selectedOperator)}
+                        onPress={() => {
+                          NavigationService.navigate('target_gameplay', { level: currentLevel, operator: selectedOperator });
+                          startLevel(currentLevel, selectedOperator);
+                        }}
                         activeOpacity={0.85}
                       >
                         <LinearGradient
@@ -1538,6 +1645,139 @@ const styles = StyleSheet.create({
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
+  },
+  introHeroCard: {
+    borderRadius: 14,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.25)',
+    marginBottom: 16,
+  },
+  introHeroGradient: {
+    padding: 16,
+  },
+  introBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  introRatingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 215, 0, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 215, 0, 0.3)',
+  },
+  introRatingText: {
+    color: '#FFD700',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  introSpeedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.12)',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.3)',
+  },
+  introSpeedText: {
+    color: '#39FF14',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+  },
+  introHeading: {
+    color: '#FFFFFF',
+    fontSize: 22,
+    fontWeight: '900',
+    letterSpacing: 1.2,
+    marginBottom: 2,
+    ...(Platform.OS === 'web' ? { fontFamily: "'Space Grotesk', sans-serif" } : {}),
+  },
+  introSubHeading: {
+    color: '#39FF14',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    marginBottom: 10,
+  },
+  introDescription: {
+    color: '#99A89A',
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 14,
+  },
+  introRewardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  introRewardPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+  },
+  introRewardText: {
+    color: '#E0EDE1',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  introHighlightsGrid: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  introHighlightCard: {
+    flex: 1,
+    backgroundColor: 'rgba(21, 30, 24, 0.6)',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  introHighlightTitle: {
+    color: '#FFFFFF',
+    fontSize: 11,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 2,
+  },
+  introHighlightDesc: {
+    color: '#8A9E8D',
+    fontSize: 9,
+    textAlign: 'center',
+    lineHeight: 12,
+  },
+  introStartBtn: {
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  introStartBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  introStartBtnText: {
+    color: '#050705',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.8,
   },
   selectModeScroll: {
     flex: 1,

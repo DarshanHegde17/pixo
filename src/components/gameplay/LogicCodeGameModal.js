@@ -69,6 +69,32 @@ export const LogicCodeGameModal = ({
 
   const timerRef = useRef(null);
 
+  // Sync screen state with NavigationService route
+  useEffect(() => {
+    if (!visible) return;
+
+    const syncWithRoute = (route) => {
+      if (!route) return;
+      if (route.id === 'cyber_strike') {
+        setScreen('dashboard');
+      } else if (route.id === 'cyber_strike_levels') {
+        if (route.params?.categoryId) {
+          const found = LOGIC_CODE_CATEGORIES.find((c) => c.id === route.params.categoryId);
+          if (found) setSelectedCategory(found);
+        }
+        setScreen('category_levels');
+      } else if (route.id === 'cyber_strike_gameplay') {
+        setScreen('playing');
+      } else if (['home', 'games', 'quests', 'store', 'profile'].includes(route.id)) {
+        if (onClose) onClose();
+      }
+    };
+
+    syncWithRoute(NavigationService.getCurrentRoute());
+    const unsub = NavigationService.subscribe(syncWithRoute);
+    return unsub;
+  }, [visible, onClose]);
+
   // Lock background scrolling on Web
   useEffect(() => {
     if (Platform.OS === 'web' && typeof document !== 'undefined') {
@@ -171,6 +197,7 @@ export const LogicCodeGameModal = ({
     setFeedback(null);
     setAnswersHistory([]);
     setLevelVictoryData(null);
+    NavigationService.navigate('cyber_strike_gameplay', { level: num, categoryId: selectedCategory.id });
     setScreen('playing');
 
     // Save initial session state
@@ -211,6 +238,7 @@ export const LogicCodeGameModal = ({
     setHintUsedForQuestion(false);
     setFeedback(null);
     setAnswersHistory(sess.answersHistory || []);
+    NavigationService.navigate('cyber_strike_gameplay', { level: sess.level, categoryId: cat.id });
     setScreen('playing');
   };
 
@@ -423,7 +451,7 @@ export const LogicCodeGameModal = ({
     }
 
     setIsPauseModalOpen(false);
-    setScreen('category_levels');
+    NavigationService.goBack();
   }, [user?.id, selectedLevel, selectedCategory, questions, currentQuestionIdx, score, earnedXp, correctCount, answersHistory]);
 
   // Centralized Navigation Back Handler registration for Logic Code
@@ -441,29 +469,13 @@ export const LogicCodeGameModal = ({
           handlePauseMission();
           return true;
         }
-        if (screen === 'category_levels') {
-          setScreen('dashboard');
-          return true;
-        }
-        if (screen === 'progress_dashboard') {
-          setScreen('dashboard');
-          return true;
-        }
-        if (screen === 'level_complete') {
-          setScreen('category_levels');
-          return true;
-        }
-        if (screen === 'dashboard') {
-          handleModalClose();
-          return true;
-        }
         return false;
       },
       80
     );
 
     return unregister;
-  }, [visible, screen, isPauseModalOpen, handlePauseMission, handleModalClose]);
+  }, [visible, screen, isPauseModalOpen, handlePauseMission]);
 
   if (!visible) return null;
 
@@ -487,12 +499,8 @@ export const LogicCodeGameModal = ({
                   onPress={() => {
                     if (screen === 'playing') {
                       handlePauseMission();
-                    } else if (screen === 'category_levels' || screen === 'progress_dashboard') {
-                      setScreen('dashboard');
-                    } else if (screen === 'level_complete') {
-                      setScreen('category_levels');
                     } else {
-                      handleModalClose();
+                      NavigationService.goBack();
                     }
                   }}
                   variant="circle"
@@ -521,7 +529,7 @@ export const LogicCodeGameModal = ({
                       if (screen === 'playing') {
                         handlePauseMission();
                       } else {
-                        setScreen('dashboard');
+                        NavigationService.goBack();
                       }
                     }}
                   >
@@ -544,7 +552,7 @@ export const LogicCodeGameModal = ({
                     if (screen === 'playing') {
                       handlePauseMission();
                     } else {
-                      handleModalClose();
+                      NavigationService.goBack();
                     }
                   }}
                   accessibilityLabel="Close game"
@@ -642,6 +650,7 @@ export const LogicCodeGameModal = ({
                             return;
                           }
                           setSelectedCategory(cat);
+                          NavigationService.navigate('cyber_strike_levels', { categoryId: cat.id });
                           setScreen('category_levels');
                         }}
                       >
@@ -708,7 +717,7 @@ export const LogicCodeGameModal = ({
               <View style={styles.flexOneContainer}>
                 {/* Sector Header */}
                 <View style={[styles.sectorHeaderBar, { borderColor: `${selectedCategory.color}40` }]}>
-                  <TouchableOpacity style={styles.backBtn} onPress={() => setScreen('dashboard')}>
+                  <TouchableOpacity style={styles.backBtn} onPress={() => NavigationService.goBack()}>
                     <Ionicons name="arrow-back" size={18} color="#FFFFFF" style={{ marginRight: 6 }} />
                     <Text style={styles.backBtnText}>HUB</Text>
                   </TouchableOpacity>

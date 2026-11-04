@@ -71,21 +71,6 @@ export const GameDetailsModal = ({
     };
   }, [visible, game?.id, user?.id]);
 
-  // Centralized Navigation Back Interceptor
-  useEffect(() => {
-    if (visible) {
-      const unregister = NavigationService.registerBackHandler(
-        'game_details_modal',
-        () => {
-          onClose();
-          return true;
-        },
-        50
-      );
-      return unregister;
-    }
-  }, [visible, onClose]);
-
   if (!visible || !game) return null;
 
   const isCurrentLevelLocked = selectedLevel > unlockedLevel;

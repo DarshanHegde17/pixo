@@ -341,14 +341,11 @@ export const CoinStoreScreen = ({ onNavigateHome }) => {
         <View style={styles.header}>
           <View style={styles.headerTitleRow}>
             <PixoBackButton
-              onPress={() => {
-                if (onNavigateHome) onNavigateHome();
-                else NavigationService.goBack();
-              }}
-              label="DASHBOARD"
+              onPress={() => NavigationService.goBack()}
+              label="BACK"
               variant="pill"
               size={15}
-              accessibilityLabel="Navigate back to Dashboard"
+              accessibilityLabel="Navigate back to previous page"
             />
 
             <View style={styles.titleBadge}>
