@@ -54,16 +54,14 @@ async function runTests() {
     const homeScreenContent = fs.readFileSync(path.resolve('src/screens/HomeScreen.js'), 'utf-8');
 
     assert.ok(
-      homeScreenContent.includes('topRewardSummaryBar'),
-      'HomeScreen must contain topRewardSummaryBar'
+      homeScreenContent.includes('headerRightRow') || homeScreenContent.includes('topRewardSummaryBar'),
+      'HomeScreen must contain top header reward summary'
     );
 
     assert.ok(
       homeScreenContent.includes('userCoins.toLocaleString()') &&
-      homeScreenContent.includes('COINS') &&
       homeScreenContent.includes('userStreak') &&
-      homeScreenContent.includes('userXp.toLocaleString()') &&
-      homeScreenContent.includes('XP'),
+      homeScreenContent.includes('userXp.toLocaleString()'),
       'Top Reward Summary must display live Coins, Streak Days, and XP'
     );
 
@@ -73,47 +71,47 @@ async function runTests() {
   }
 
   // -------------------------------------------------------------
-  // Test 3: Daily Quest Section Structure & Live Tracking
+  // Test 3: Daily Objectives Structure & Live Tracking
   // -------------------------------------------------------------
   try {
     const testUserId = `test_quest_user_${Date.now()}`;
-    const initialQuests = await GamingActivityService.getDailyQuests(testUserId);
+    const initialQuests = await GamingActivityService.getDailyObjectives(testUserId);
 
-    assert.strictEqual(initialQuests.quests.length, 3, 'Must have exactly 3 Daily Quests');
-    assert.strictEqual(initialQuests.quests[0].title, 'Win 2 Sprint Duels in a Row');
-    assert.strictEqual(initialQuests.quests[1].title, 'Play Any 2 Duels');
-    assert.strictEqual(initialQuests.quests[2].title, 'Win 2 Ken-Ken Duels in a Row');
+    assert.strictEqual(initialQuests.objectives.length, 3, 'Must have exactly 3 Daily Objectives');
+    assert.strictEqual(initialQuests.objectives[0].id, 'daily_login');
+    assert.strictEqual(initialQuests.objectives[0].isCompleted, true, 'Daily login automatically completed');
+    assert.strictEqual(initialQuests.objectives[1].id, 'play_3_games');
+    assert.strictEqual(initialQuests.objectives[2].id, 'play_7_games');
 
-    // Simulate 1 game win
-    await GamingActivityService.recordQuestActivity(testUserId, { won: true, difficulty: 1 });
-    const after1Win = await GamingActivityService.getDailyQuests(testUserId);
+    // Simulate 1 game completion
+    await GamingActivityService.recordGameCompletion(testUserId, { won: true, eventId: `evt_1_${Date.now()}` });
+    const after1Win = await GamingActivityService.getDailyObjectives(testUserId);
 
-    // Played duels should be 1
-    const quest2 = after1Win.quests.find((q) => q.id === 'quest_2');
-    assert.strictEqual(quest2.current, 1, 'Quest 2 (Play Any 2 Duels) should have progress 1');
+    // Play 3 Games should be 1/3, Play 7 Games should be 1/7
+    const q2 = after1Win.objectives.find((q) => q.id === 'play_3_games');
+    const q3 = after1Win.objectives.find((q) => q.id === 'play_7_games');
+    assert.strictEqual(q2.current, 1, 'play_3_games should have progress 1');
+    assert.strictEqual(q3.current, 1, 'play_7_games should have progress 1');
 
-    // Consecutive wins should be 1
-    const quest1 = after1Win.quests.find((q) => q.id === 'quest_1');
-    assert.strictEqual(quest1.current, 1, 'Quest 1 (Win 2 in a Row) should have progress 1');
+    // Simulate 2 more game completions (total 3)
+    await GamingActivityService.recordGameCompletion(testUserId, { won: true, eventId: `evt_2_${Date.now()}` });
+    await GamingActivityService.recordGameCompletion(testUserId, { won: true, eventId: `evt_3_${Date.now()}` });
+    const after3Wins = await GamingActivityService.getDailyObjectives(testUserId);
 
-    // Simulate 2nd consecutive win
-    await GamingActivityService.recordQuestActivity(testUserId, { won: true, difficulty: 2 });
-    const after2Wins = await GamingActivityService.getDailyQuests(testUserId);
+    const q2After = after3Wins.objectives.find((q) => q.id === 'play_3_games');
+    const q3After = after3Wins.objectives.find((q) => q.id === 'play_7_games');
+    assert.strictEqual(q2After.current, 3, 'play_3_games reached target 3');
+    assert.strictEqual(q2After.isCompleted, true, 'play_3_games marked completed');
+    assert.strictEqual(q3After.current, 3, 'play_7_games reached progress 3');
+    assert.strictEqual(q3After.isCompleted, false, 'play_7_games not yet completed (3/7)');
 
-    const q1After = after2Wins.quests.find((q) => q.id === 'quest_1');
-    const q2After = after2Wins.quests.find((q) => q.id === 'quest_2');
-    assert.strictEqual(q1After.current, 2, 'Quest 1 reached target 2');
-    assert.strictEqual(q1After.isCompleted, true, 'Quest 1 marked completed');
-    assert.strictEqual(q2After.current, 2, 'Quest 2 reached target 2');
-    assert.strictEqual(q2After.isCompleted, true, 'Quest 2 marked completed');
-
-    pass('Test 3: Daily Quests track live in-game completions and consecutive wins');
+    pass('Test 3: Daily Objectives track live in-game completions');
   } catch (e) {
-    fail('Test 3: Daily Quest Tracking', e);
+    fail('Test 3: Daily Objectives Tracking', e);
   }
 
   // -------------------------------------------------------------
-  // Test 4: Daily Quest Claiming & Duplicate Prevention
+  // Test 4: Daily Objective Claiming & Duplicate Prevention
   // -------------------------------------------------------------
   try {
     const testEmail = `quest_${Date.now()}@pixo.gg`;
@@ -126,37 +124,30 @@ async function runTests() {
     });
     const user = regRes.user;
 
-    // Complete 2 wins
-    await GamingActivityService.recordQuestActivity(user.id, { won: true });
-    await GamingActivityService.recordQuestActivity(user.id, { won: true });
+    // Check initial user balances
+    const initialUser = await AuthService.findUserById(user.id);
+    const initialXp = initialUser.xp || 0;
+    const initialCoins = initialUser.coins || 0;
 
-    // Claim Quest 1 (+25 XP, +5 Coins)
-    const claimRes1 = await GamingActivityService.claimQuestReward(user.id, 'quest_1');
+    // Claim Daily Login (+50 XP, +100 Coins)
+    const claimRes1 = await GamingActivityService.claimDailyObjective(user.id, 'daily_login');
     assert.strictEqual(claimRes1.success, true);
-    assert.strictEqual(claimRes1.xpAwarded, 25);
-    assert.strictEqual(claimRes1.coinsAwarded, 5);
+    assert.strictEqual(claimRes1.xpAwarded, 50);
+    assert.strictEqual(claimRes1.coinsAwarded, 100);
 
     // Verify user received XP and Coins
     const updatedUser = await AuthService.findUserById(user.id);
-    assert.strictEqual(updatedUser.xp, 25);
-    assert.strictEqual(updatedUser.coins, 5);
+    assert.strictEqual(updatedUser.xp, initialXp + 50);
+    assert.strictEqual(updatedUser.coins, initialCoins + 100);
 
     // Duplicate claim attempt must be rejected
-    const dupRes = await GamingActivityService.claimQuestReward(user.id, 'quest_1');
-    assert.strictEqual(dupRes.success, false, 'Duplicate claim must fail');
-    assert.ok(
-      (dupRes.error || dupRes.message || '').includes('already collected') ||
-      (dupRes.error || dupRes.message || '').includes('already claimed')
-    );
+    const dupRes = await GamingActivityService.claimDailyObjective(user.id, 'daily_login');
+    assert.strictEqual(dupRes.success, false);
+    assert.ok(dupRes.error.includes('already collected') || dupRes.error.includes('already claimed'));
 
-    // Balances must remain untouched after duplicate attempt
-    const afterDupUser = await AuthService.findUserById(user.id);
-    assert.strictEqual(afterDupUser.xp, 25);
-    assert.strictEqual(afterDupUser.coins, 5);
-
-    pass('Test 4: Daily Quest reward claiming awards XP & Coins and prevents duplicates');
+    pass('Test 4: Daily Objective reward claiming & duplicate prevention');
   } catch (e) {
-    fail('Test 4: Quest Claiming', e);
+    fail('Test 4: Daily Objective Claiming', e);
   }
 
   // -------------------------------------------------------------

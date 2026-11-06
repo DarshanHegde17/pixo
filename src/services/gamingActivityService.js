@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
   STREAK_RESTORATIONS_PREFIX: '@soloplay_streak_restorations_',
   INITIALIZED_FLAG_PREFIX: '@soloplay_data_initialized_',
   TRANSACTIONS_PREFIX: '@pixo_reward_transactions_',
+  DAILY_OBJECTIVES_PREFIX: '@pixo_daily_objectives_',
   DAILY_QUESTS_PREFIX: '@pixo_daily_quests_',
   UNLOCKED_LEVEL_PREFIX: '@pixo_game_unlocked_level_',
   COMPLETED_LEVELS_PREFIX: '@pixo_completed_levels_',
@@ -17,6 +18,9 @@ const STORAGE_KEYS = {
 // Concurrency mutex locks
 let isRestoringStreakLock = false;
 let isExchangingLock = false;
+let isClaimingRewardLock = false;
+
+export const IST_TIMEZONE = 'Asia/Kolkata';
 
 /**
  * Standard milestones for streak badges & rewards (7 to 500 Days)
@@ -24,40 +28,45 @@ let isExchangingLock = false;
 export const STREAK_MILESTONES = [7, 14, 25, 50, 75, 100, 150, 200, 250, 300, 365, 400, 500];
 
 /**
- * 3 Daily Quests per Master Prompt Section 4
+ * 3 Daily Objectives per Master Prompt:
+ * Objective 1 - Daily Login: +50 XP, +100 Coins (auto-completed on first daily check/login)
+ * Objective 2 - Play 3 Games: +100 XP, +200 Coins (claimable at 3/3)
+ * Objective 3 - Play 7 Games: +150 XP, +300 Coins (claimable at 7/7)
  */
-export const DEFAULT_DAILY_QUESTS = [
+export const DEFAULT_DAILY_OBJECTIVES = [
   {
-    id: 'quest_1',
-    title: 'Win 2 Sprint Duels in a Row',
-    desc: 'Achieve 2 consecutive wins in Speed Math Sprint',
-    target: 2,
-    rewardXp: 25,
-    rewardCoins: 5,
-    icon: 'flash',
-    type: 'consecutive_wins',
-  },
-  {
-    id: 'quest_2',
-    title: 'Play Any 2 Duels',
-    desc: 'Complete 2 game battles across any difficulty',
-    target: 2,
-    rewardXp: 20,
-    rewardCoins: 4,
-    icon: 'game-controller',
-    type: 'games_played',
-  },
-  {
-    id: 'quest_3',
-    title: 'Win 2 Ken-Ken Duels in a Row',
-    desc: 'Win 2 consecutive calculation battles with zero mistakes',
-    target: 2,
-    rewardXp: 30,
-    rewardCoins: 6,
+    id: 'daily_login',
+    title: 'Complete Daily Login',
+    desc: 'Log in to PIXO once today',
+    target: 1,
+    rewardXp: 50,
+    rewardCoins: 100,
     icon: 'trophy',
-    type: 'consecutive_wins',
+    type: 'login',
+  },
+  {
+    id: 'play_3_games',
+    title: 'Play 3 Games',
+    desc: 'Complete 3 games today',
+    target: 3,
+    rewardXp: 100,
+    rewardCoins: 200,
+    icon: 'trending-up',
+    type: 'games_completed',
+  },
+  {
+    id: 'play_7_games',
+    title: 'Play 7 Games',
+    desc: 'Complete 7 games today',
+    target: 7,
+    rewardXp: 150,
+    rewardCoins: 300,
+    icon: 'ribbon',
+    type: 'games_completed',
   },
 ];
+
+export const DEFAULT_DAILY_QUESTS = DEFAULT_DAILY_OBJECTIVES;
 
 /**
  * Sequential 10 Game Levels Config per Master Prompt Section 5
@@ -189,6 +198,36 @@ export function getOffsetDateKey(daysOffset = 0, referenceDate = new Date(), tim
   const d = new Date(referenceDate);
   d.setDate(d.getDate() + daysOffset);
   return toDateKey(d, timezone);
+}
+
+/**
+ * Calculates countdown remaining until next 12:00 AM IST (Asia/Kolkata)
+ */
+export function getISTMidnightCountdown(now = new Date()) {
+  const currentDate = now instanceof Date ? now : new Date(now);
+  const istDateKey = toDateKey(currentDate, IST_TIMEZONE);
+  const [y, m, d] = (istDateKey || '2026-01-01').split('-').map(Number);
+
+  // Next midnight in IST is tomorrow at 00:00:00 IST (UTC - 5h30m)
+  const nextMidnightISTMs = Date.UTC(y, m - 1, d + 1, 0, 0, 0) - (5.5 * 3600 * 1000);
+  const diffMs = Math.max(0, nextMidnightISTMs - currentDate.getTime());
+
+  const totalSeconds = Math.floor(diffMs / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  const formatted = `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+  const shortFormatted = `${hours}h ${String(minutes).padStart(2, '0')}m`;
+
+  return {
+    hours,
+    minutes,
+    seconds,
+    totalSeconds,
+    formatted,
+    shortFormatted,
+  };
 }
 
 /**
@@ -1514,194 +1553,322 @@ export const GamingActivityService = {
   },
 
   /**
-   * Computes string remaining time until midnight in user's timezone (e.g. "8h 24m")
+   * Computes countdown remaining until 12:00 AM IST
+   */
+  getISTMidnightCountdown(now = new Date()) {
+    return getISTMidnightCountdown(now);
+  },
+
+  /**
+   * Computes string remaining time until midnight in IST (e.g. "8h 24m")
    */
   getTimeUntilMidnight() {
-    const now = new Date();
-    const midnight = new Date(now);
-    midnight.setHours(24, 0, 0, 0);
-    const diffMs = Math.max(0, midnight.getTime() - now.getTime());
-    const hours = Math.floor(diffMs / (1000 * 60 * 60));
-    const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
-    return `${hours}h ${minutes}m`;
+    return getISTMidnightCountdown().shortFormatted;
   },
 
   /**
-   * Retrieves user's Daily Quests for the current calendar day
-   * Master Prompt Section 4:
-   * - Real quest progress updated from game activity
-   * - Resets at midnight
-   * - Shows completed status and prevents duplicate rewards
+   * Retrieves user's Daily Objectives for the current calendar day in Asia/Kolkata (IST)
+   * Master Prompt Section 1 & 4:
+   * - Daily Login: 50 XP, 100 Coins (target 1, automatically completed upon first daily login/check)
+   * - Play 3 Games: 100 XP, 200 Coins (target 3, advances only on real completed games)
+   * - Play 7 Games: 150 XP, 300 Coins (target 7, advances only on real completed games)
+   * - Automatic daily reset at 12:00 AM IST (Asia/Kolkata).
+   * - Deduplication via unique event IDs.
    */
-  async getDailyQuests(userId, timezone = getAppTimezone()) {
-    if (!userId) return { dateKey: '', resetTimeString: '', quests: [] };
+  async getDailyObjectives(userId, timezone = IST_TIMEZONE) {
+    if (!userId) {
+      return {
+        dateKey: '',
+        resetTimeString: '',
+        resetCountdown: '',
+        dailyLoginCompleted: false,
+        totalCompletedGames: 0,
+        completedEventIds: [],
+        objectives: [],
+        quests: [],
+      };
+    }
+    const cleanUserId = String(userId).trim();
     const now = new Date();
     const todayKey = toDateKey(now, timezone);
-    const key = `${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${userId}_${todayKey}`;
-    const stored = await SessionStorage.getItem(key);
+    const key = `${STORAGE_KEYS.DAILY_OBJECTIVES_PREFIX}${cleanUserId}_${todayKey}`;
+    let stored = await SessionStorage.getItem(key);
 
-    const resetTimeString = this.getTimeUntilMidnight();
+    const countdown = getISTMidnightCountdown(now);
 
-    if (stored && Array.isArray(stored.quests)) {
+    if (stored && Array.isArray(stored.objectives)) {
+      let needsSave = false;
+      const objectives = stored.objectives.map((obj) => {
+        if (obj.type === 'login' && obj.current < 1) {
+          needsSave = true;
+          return {
+            ...obj,
+            current: 1,
+            isCompleted: true,
+            progress: 1,
+          };
+        }
+        return {
+          ...obj,
+          isCompleted: obj.current >= obj.target,
+          progress: Math.min(1, obj.target > 0 ? obj.current / obj.target : 0),
+        };
+      });
+
+      if (!stored.dailyLoginCompleted) {
+        stored.dailyLoginCompleted = true;
+        needsSave = true;
+      }
+
+      if (needsSave) {
+        stored.objectives = objectives;
+        stored.updatedAt = now.toISOString();
+        await SessionStorage.setItem(key, stored);
+      }
+
       return {
         dateKey: todayKey,
-        resetTimeString,
-        playedToday: stored.playedToday || 0,
-        consecutiveWins: stored.consecutiveWins || 0,
-        quests: stored.quests.map((q) => ({
-          ...q,
-          isCompleted: q.current >= q.target,
-          progress: Math.min(1, q.current / q.target),
-        })),
+        resetTimeString: countdown.shortFormatted,
+        resetCountdown: countdown.formatted,
+        countdown,
+        dailyLoginCompleted: true,
+        totalCompletedGames: stored.totalCompletedGames || 0,
+        completedEventIds: stored.completedEventIds || [],
+        objectives,
+        quests: objectives,
       };
     }
 
-    // Initialize fresh quests for today
-    const freshQuests = DEFAULT_DAILY_QUESTS.map((q) => ({
-      ...q,
-      current: 0,
-      claimed: false,
-      isCompleted: false,
-      progress: 0,
-    }));
-
-    const payload = {
-      dateKey: todayKey,
-      playedToday: 0,
-      consecutiveWins: 0,
-      quests: freshQuests,
-      updatedAt: now.toISOString(),
-    };
-    await SessionStorage.setItem(key, payload);
-
-    return {
-      dateKey: todayKey,
-      resetTimeString,
-      playedToday: 0,
-      consecutiveWins: 0,
-      quests: freshQuests,
-    };
-  },
-
-  /**
-   * Updates Daily Quest progress based on actual game activity
-   * - Increments played count
-   * - Increments or resets consecutive wins
-   */
-  async recordQuestActivity(userId, { won = false, difficulty = 1, gameId = '' } = {}) {
-    if (!userId) return null;
-    const timezone = getAppTimezone();
-    const now = new Date();
-    const todayKey = toDateKey(now, timezone);
-    const key = `${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${userId}_${todayKey}`;
-
-    const currentData = await this.getDailyQuests(userId, timezone);
-    const playedToday = (currentData.playedToday || 0) + 1;
-    const consecutiveWins = won ? (currentData.consecutiveWins || 0) + 1 : 0;
-
-    const updatedQuests = (currentData.quests || []).map((q) => {
-      let newCurrent = q.current;
-      if (q.type === 'consecutive_wins') {
-        newCurrent = Math.min(q.target, Math.max(q.current, consecutiveWins));
-      } else if (q.type === 'games_played') {
-        newCurrent = Math.min(q.target, playedToday);
+    // Initialize fresh objectives for today (12:00 AM IST reset)
+    const freshObjectives = DEFAULT_DAILY_OBJECTIVES.map((obj) => {
+      if (obj.type === 'login') {
+        return {
+          ...obj,
+          current: 1,
+          isCompleted: true,
+          claimed: false,
+          progress: 1,
+        };
       }
       return {
-        ...q,
-        current: newCurrent,
-        isCompleted: newCurrent >= q.target,
-        progress: Math.min(1, newCurrent / q.target),
+        ...obj,
+        current: 0,
+        isCompleted: false,
+        claimed: false,
+        progress: 0,
       };
     });
 
     const payload = {
       dateKey: todayKey,
-      playedToday,
-      consecutiveWins,
-      quests: updatedQuests,
+      dailyLoginCompleted: true,
+      totalCompletedGames: 0,
+      completedEventIds: [],
+      objectives: freshObjectives,
+      createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
     };
     await SessionStorage.setItem(key, payload);
 
     return {
       dateKey: todayKey,
-      resetTimeString: this.getTimeUntilMidnight(),
-      playedToday,
-      consecutiveWins,
-      quests: updatedQuests,
+      resetTimeString: countdown.shortFormatted,
+      resetCountdown: countdown.formatted,
+      countdown,
+      dailyLoginCompleted: true,
+      totalCompletedGames: 0,
+      completedEventIds: [],
+      objectives: freshObjectives,
+      quests: freshObjectives,
     };
   },
 
   /**
-   * Claims reward for a completed daily quest.
-   * Atomically adds XP & Coins, marks as claimed, and records QUEST_REWARD transaction.
+   * Records a verified game completion for Daily Objectives tracking.
+   * Deduplicates by unique eventId to prevent rapid clicks / reloads from double-counting.
+   * Advances both the 3-game and 7-game objectives.
    */
-  async claimQuestReward(userId, questId) {
-    if (!userId || !questId) return { success: false, error: 'Parameters missing.' };
-    const timezone = getAppTimezone();
+  async recordGameCompletion(userId, { gameId = '', eventId = '', won = true } = {}) {
+    if (!userId) return null;
+    const cleanUserId = String(userId).trim();
+    const timezone = IST_TIMEZONE;
     const now = new Date();
     const todayKey = toDateKey(now, timezone);
-    const key = `${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${userId}_${todayKey}`;
+    const key = `${STORAGE_KEYS.DAILY_OBJECTIVES_PREFIX}${cleanUserId}_${todayKey}`;
 
-    const currentData = await this.getDailyQuests(userId, timezone);
-    const quests = currentData.quests || [];
-    const questIndex = quests.findIndex((q) => q.id === questId);
+    const currentData = await this.getDailyObjectives(cleanUserId, timezone);
 
-    if (questIndex === -1) {
-      return { success: false, error: 'Quest not found.' };
+    // Deduplication check: do not count if this exact eventId was already recorded today
+    const completedEventIds = Array.isArray(currentData.completedEventIds) ? [...currentData.completedEventIds] : [];
+    if (eventId && completedEventIds.includes(String(eventId))) {
+      return currentData;
     }
 
-    const quest = quests[questIndex];
-    if (quest.claimed) {
-      return { success: false, error: 'Reward already collected for this quest today.' };
-    }
-    if (quest.current < quest.target) {
-      return { success: false, error: `Quest not yet completed (${quest.current}/${quest.target}).` };
-    }
+    const eventIdToTrack = String(eventId || `game_evt_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`);
+    completedEventIds.push(eventIdToTrack);
 
-    // Mark as claimed
-    quests[questIndex] = {
-      ...quest,
-      claimed: true,
-    };
+    const totalCompletedGames = (currentData.totalCompletedGames || 0) + 1;
+
+    const updatedObjectives = (currentData.objectives || []).map((obj) => {
+      if (obj.type === 'games_completed') {
+        const newCurrent = Math.min(obj.target, totalCompletedGames);
+        return {
+          ...obj,
+          current: newCurrent,
+          isCompleted: newCurrent >= obj.target,
+          progress: Math.min(1, newCurrent / obj.target),
+        };
+      }
+      if (obj.type === 'login') {
+        return {
+          ...obj,
+          current: 1,
+          isCompleted: true,
+          progress: 1,
+        };
+      }
+      return obj;
+    });
 
     const payload = {
       dateKey: todayKey,
-      playedToday: currentData.playedToday,
-      consecutiveWins: currentData.consecutiveWins,
-      quests,
+      dailyLoginCompleted: true,
+      totalCompletedGames,
+      completedEventIds,
+      objectives: updatedObjectives,
       updatedAt: now.toISOString(),
     };
     await SessionStorage.setItem(key, payload);
 
-    // Record transaction
-    const transaction = {
-      id: `tx_quest_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
-      userId,
-      transactionType: 'QUEST_REWARD',
-      xpAmount: quest.rewardXp,
-      coinAmount: quest.rewardCoins,
-      questId: quest.id,
-      questTitle: quest.title,
-      transactionDate: now.toISOString(),
-      transactionStatus: 'COMPLETED',
-    };
-    await this.recordTransaction(userId, transaction);
-
-    // Update balances
-    const updatedUser = await AuthService.updateUserBalances(userId, {
-      xpDelta: quest.rewardXp,
-      coinsDelta: quest.rewardCoins,
-    });
-
+    const countdown = getISTMidnightCountdown(now);
     return {
-      success: true,
-      quest: quests[questIndex],
-      quests,
-      xpAwarded: quest.rewardXp,
-      coinsAwarded: quest.rewardCoins,
-      user: updatedUser,
+      dateKey: todayKey,
+      resetTimeString: countdown.shortFormatted,
+      resetCountdown: countdown.formatted,
+      countdown,
+      dailyLoginCompleted: true,
+      totalCompletedGames,
+      completedEventIds,
+      objectives: updatedObjectives,
+      quests: updatedObjectives,
     };
+  },
+
+  /**
+   * Atomically claims reward for a completed daily objective.
+   * - Mutex lock prevents double claims.
+   * - Verifies completion and not already claimed today.
+   * - Credits XP & Coins to user's wallet via AuthService.updateUserBalances.
+   * - Saves DAILY_OBJECTIVE_REWARD transaction in database.
+   */
+  async claimDailyObjective(userId, objectiveId) {
+    if (!userId || !objectiveId) {
+      return { success: false, error: 'User ID and Objective ID required.' };
+    }
+    if (isClaimingRewardLock) {
+      return { success: false, error: 'A reward claim is currently in progress. Please wait a moment.' };
+    }
+
+    isClaimingRewardLock = true;
+    try {
+      const cleanUserId = String(userId).trim();
+      const timezone = IST_TIMEZONE;
+      const now = new Date();
+      const todayKey = toDateKey(now, timezone);
+      const key = `${STORAGE_KEYS.DAILY_OBJECTIVES_PREFIX}${cleanUserId}_${todayKey}`;
+
+      const currentData = await this.getDailyObjectives(cleanUserId, timezone);
+      const objectives = currentData.objectives || [];
+
+      // Find objective by direct ID or recognized aliases
+      const targetId = String(objectiveId).trim();
+      const objIndex = objectives.findIndex((obj) => {
+        if (obj.id === targetId) return true;
+        if (targetId === 'dq1' || targetId === 'quest_1') return obj.id === 'daily_login';
+        if (targetId === 'dq2' || targetId === 'quest_2') return obj.id === 'play_3_games';
+        if (targetId === 'dq3' || targetId === 'quest_3') return obj.id === 'play_7_games';
+        return false;
+      });
+
+      if (objIndex === -1) {
+        return { success: false, error: 'Daily objective not found.' };
+      }
+
+      const objective = objectives[objIndex];
+      if (objective.claimed) {
+        return { success: false, error: 'Reward already collected for this objective today.' };
+      }
+      if (objective.current < objective.target) {
+        return {
+          success: false,
+          error: `Objective not yet completed (${objective.current}/${objective.target}). Complete more games to unlock.`,
+        };
+      }
+
+      // Mark as claimed
+      const updatedObjectives = [...objectives];
+      updatedObjectives[objIndex] = {
+        ...objective,
+        claimed: true,
+      };
+
+      const payload = {
+        dateKey: todayKey,
+        dailyLoginCompleted: currentData.dailyLoginCompleted,
+        totalCompletedGames: currentData.totalCompletedGames,
+        completedEventIds: currentData.completedEventIds,
+        objectives: updatedObjectives,
+        updatedAt: now.toISOString(),
+      };
+      await SessionStorage.setItem(key, payload);
+
+      // Record transaction in persistent history
+      const transaction = {
+        id: `tx_daily_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        userId: cleanUserId,
+        transactionType: 'DAILY_OBJECTIVE_REWARD',
+        xpAmount: objective.rewardXp,
+        coinAmount: objective.rewardCoins,
+        objectiveId: objective.id,
+        objectiveTitle: objective.title,
+        transactionDate: now.toISOString(),
+        transactionStatus: 'COMPLETED',
+      };
+      await this.recordTransaction(cleanUserId, transaction);
+
+      // Atomically update user balance
+      const updatedUser = await AuthService.updateUserBalances(cleanUserId, {
+        xpDelta: objective.rewardXp,
+        coinsDelta: objective.rewardCoins,
+      });
+
+      return {
+        success: true,
+        objective: updatedObjectives[objIndex],
+        objectives: updatedObjectives,
+        quests: updatedObjectives,
+        xpAwarded: objective.rewardXp,
+        coinsAwarded: objective.rewardCoins,
+        user: updatedUser,
+      };
+    } finally {
+      isClaimingRewardLock = false;
+    }
+  },
+
+  /**
+   * Backward-compatibility aliases for legacy quest calls
+   */
+  async getDailyQuests(userId, timezone = IST_TIMEZONE) {
+    return await this.getDailyObjectives(userId, timezone);
+  },
+
+  async recordQuestActivity(userId, details = {}) {
+    return await this.recordGameCompletion(userId, details);
+  },
+
+  async claimQuestReward(userId, questId) {
+    return await this.claimDailyObjective(userId, questId);
   },
 
   /**
@@ -1761,6 +1928,7 @@ export const GamingActivityService = {
       await SessionStorage.removeItem(`${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${u.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.COMPLETED_LEVELS_PREFIX}${u.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${u.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_OBJECTIVES_PREFIX}${u.id}`);
     }
 
     const active = await AuthService.getActiveSession();
@@ -1780,6 +1948,7 @@ export const GamingActivityService = {
       await SessionStorage.removeItem(`${STORAGE_KEYS.UNLOCKED_LEVEL_PREFIX}${active.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.COMPLETED_LEVELS_PREFIX}${active.id}`);
       await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_QUESTS_PREFIX}${active.id}`);
+      await SessionStorage.removeItem(`${STORAGE_KEYS.DAILY_OBJECTIVES_PREFIX}${active.id}`);
     }
   },
 

@@ -351,6 +351,18 @@ export const BrainBlitzPersistenceService = {
       }
     }
 
+    // Update daily objectives tracking for completed game
+    try {
+      const completionEventId = `bb_${mode}_lvl${numLevel}_${Date.now()}`;
+      await GamingActivityService.recordGameCompletion(userId, {
+        gameId: `brain_blitz_${mode}`,
+        eventId: completionEventId,
+        won: true,
+      });
+    } catch (e) {
+      console.warn('Failed to update daily objectives from Brain Blitz:', e);
+    }
+
     return {
       mode,
       level: numLevel,

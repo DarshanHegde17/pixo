@@ -426,18 +426,33 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     };
   }, [user?.id]);
 
+  // Live countdown timer to 12:00 AM IST
+  useEffect(() => {
+    const updateCountdown = () => {
+      const cd = GamingActivityService.getISTMidnightCountdown();
+      setResetCountdown(cd.formatted);
+    };
+    updateCountdown();
+    const interval = setInterval(updateCountdown, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
   // Load levels and quests from database
   const loadLevelsAndQuests = async () => {
     if (!user?.id) return;
     try {
       const [unlocked, qData] = await Promise.all([
         GamingActivityService.getUserUnlockedLevel(user.id),
-        GamingActivityService.getDailyQuests(user.id),
+        GamingActivityService.getDailyObjectives(user.id),
       ]);
       setUnlockedLevel(unlocked || 1);
       if (qData) {
-        setDailyQuests(qData.quests || []);
-        setResetCountdown(qData.resetTimeString || GamingActivityService.getTimeUntilMidnight());
+        setDailyQuests(qData.objectives || qData.quests || []);
+        if (qData.resetCountdown) {
+          setResetCountdown(qData.resetCountdown);
+        } else if (qData.resetTimeString) {
+          setResetCountdown(qData.resetTimeString);
+        }
       }
     } catch (e) {
       console.warn('Error loading game levels or daily quests:', e);
@@ -477,26 +492,31 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     await loadLevelsAndQuests();
   };
 
-  // Claim Daily Quest Reward
+  // Claim Daily Objective / Quest Reward with mutex lock
+  const [isClaimingObjective, setIsClaimingObjective] = useState(false);
+
   const handleClaimDailyQuestReward = async (questId) => {
-    if (!user?.id) return;
+    if (!user?.id || isClaimingObjective) return;
+    setIsClaimingObjective(true);
     try {
-      const res = await GamingActivityService.claimQuestReward(user.id, questId);
+      const res = await GamingActivityService.claimDailyObjective(user.id, questId);
       if (res && res.success) {
         if (addXp && res.xpAwarded) addXp(res.xpAwarded);
         setUserXp((prev) => prev + res.xpAwarded);
         setUserCoins((prev) => prev + res.coinsAwarded);
         await handleTransactionsChanged();
         Alert.alert(
-          'Quest Reward Claimed! 🏆',
-          `+${res.xpAwarded} XP and +${res.coinsAwarded} Coins added to your balance!`
+          'Objective Reward Claimed! 🏆',
+          `+${res.xpAwarded} XP and +${res.coinsAwarded} Coins have been added to your PIXO wallet!`
         );
       } else {
-        Alert.alert('Notice', res?.message || 'Quest not completed or already claimed.');
+        Alert.alert('Notice', res?.error || res?.message || 'Objective not completed or already claimed.');
       }
     } catch (err) {
-      console.warn('Error claiming quest reward:', err);
-      Alert.alert('Error', 'Unable to claim quest reward. Please try again.');
+      console.warn('Error claiming daily objective reward:', err);
+      Alert.alert('Error', 'Unable to claim daily objective reward. Please try again.');
+    } finally {
+      setIsClaimingObjective(false);
     }
   };
 
@@ -568,38 +588,44 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
 
   // Daily Objectives
   const displayQuests = useMemo(() => {
-    const q1 = dailyQuests.find((q) => q.id === 'dq1') || {
-      id: 'dq1',
-      title: 'Complete a Game',
-      desc: 'Play any game once',
+    const q1 = dailyQuests.find((q) => q.id === 'daily_login' || q.id === 'dq1' || q.id === 'quest_1') || {
+      id: 'daily_login',
+      title: 'Complete Daily Login',
+      desc: 'Log in to PIXO once today',
       rewardXp: 50,
       rewardCoins: 100,
       current: 1,
       target: 1,
-      claimed: true,
+      isCompleted: true,
+      claimed: false,
       icon: 'trophy',
+      type: 'login',
     };
-    const q2 = dailyQuests.find((q) => q.id === 'dq2') || {
-      id: 'dq2',
+    const q2 = dailyQuests.find((q) => q.id === 'play_3_games' || q.id === 'dq2' || q.id === 'quest_2') || {
+      id: 'play_3_games',
       title: 'Play 3 Games',
-      desc: 'Play 3 different games',
+      desc: 'Complete 3 games today',
       rewardXp: 100,
       rewardCoins: 200,
-      current: 1,
+      current: 0,
       target: 3,
+      isCompleted: false,
       claimed: false,
       icon: 'trending-up',
+      type: 'games_completed',
     };
-    const q3 = dailyQuests.find((q) => q.id === 'dq3') || {
-      id: 'dq3',
-      title: 'Win a Challenge',
-      desc: 'Win any challenge',
+    const q3 = dailyQuests.find((q) => q.id === 'play_7_games' || q.id === 'dq3' || q.id === 'quest_3') || {
+      id: 'play_7_games',
+      title: 'Play 7 Games',
+      desc: 'Complete 7 games today',
       rewardXp: 150,
       rewardCoins: 300,
       current: 0,
-      target: 1,
+      target: 7,
+      isCompleted: false,
       claimed: false,
       icon: 'ribbon',
+      type: 'games_completed',
     };
     return [q1, q2, q3];
   }, [dailyQuests]);
@@ -914,14 +940,14 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
 
                 <Text style={styles.pageHeadingText}>DAILY OBJECTIVES & REWARDS</Text>
                 <Text style={styles.pageSubHeadingText}>
-                  Complete all daily missions to earn bonus XP and PIXO Coins. Streaks reset every 24 hours at midnight UTC.
+                  Complete all daily missions to earn bonus XP and PIXO Coins. Objectives reset every 24 hours at 12:00 AM IST.
                 </Text>
 
                 {/* Reset Banner */}
                 <View style={styles.questResetCard}>
                   <Ionicons name="timer-outline" size={20} color="#FFD700" style={{ marginRight: 8 }} />
                   <Text style={styles.questResetCardText}>
-                    Daily Objectives refresh in: <Text style={{ color: '#FFD700', fontWeight: '800' }}>{resetCountdown}</Text>
+                    Daily Objectives refresh in: <Text style={{ color: '#FFD700', fontWeight: '800' }}>{resetCountdown}</Text> (12:00 AM IST)
                   </Text>
                 </View>
 
@@ -970,6 +996,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                               style={styles.objectiveClaimReadyBtn}
                               onPress={() => handleClaimDailyQuestReward(quest.id)}
                               activeOpacity={0.8}
+                              disabled={isClaimingObjective}
                             >
                               <LinearGradient
                                 colors={['#39FF14', '#00E5FF']}
@@ -985,14 +1012,18 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                             <TouchableOpacity
                               style={styles.objectiveLockedClaimBtn}
                               onPress={() => {
+                                const remaining = Math.max(1, quest.target - quest.current);
                                 Alert.alert(
-                                  'Quest In Progress',
-                                  `Progress: ${quest.current}/${quest.target}. Play matches to complete!`
+                                  'Objective Incomplete',
+                                  `Complete ${remaining} more game${remaining > 1 ? 's' : ''} to unlock this reward!\n\nCurrent progress: ${quest.current}/${quest.target}`
                                 );
                               }}
                               activeOpacity={0.85}
                             >
-                              <Text style={styles.objectiveLockedClaimText}>IN PROGRESS</Text>
+                              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                <Ionicons name="lock-closed" size={12} color="#7A8E7E" style={{ marginRight: 4 }} />
+                                <Text style={styles.objectiveLockedClaimText}>LOCKED</Text>
+                              </View>
                             </TouchableOpacity>
                           )}
                         </View>
@@ -1253,6 +1284,14 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                     </TouchableOpacity>
                   </View>
 
+                  {/* IST Midnight Countdown Sub-Bar */}
+                  <View style={styles.resetCountdownRow}>
+                    <Ionicons name="time-outline" size={13} color="#00E5FF" style={{ marginRight: 5 }} />
+                    <Text style={styles.resetCountdownRowText}>
+                      Resets in: <Text style={{ color: '#FFD700', fontWeight: '900' }}>{resetCountdown}</Text> (12:00 AM IST)
+                    </Text>
+                  </View>
+
                   <View style={styles.dailyObjectivesRow}>
                     {displayQuests.map((quest, index) => {
                       const isComplete = quest.current >= quest.target;
@@ -1307,7 +1346,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                             </Text>
                           </View>
 
-                          {/* Action Button */}
+                          {/* Action Button: States: LOCKED, CLAIM, CLAIMED */}
                           <View style={styles.objectiveButtonWrap}>
                             {quest.claimed ? (
                               <View style={styles.objectiveClaimedBtn}>
@@ -1319,6 +1358,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                                 style={styles.objectiveActiveClaimBtn}
                                 onPress={() => handleClaimDailyQuestReward(quest.id)}
                                 activeOpacity={0.85}
+                                disabled={isClaimingObjective}
                               >
                                 <LinearGradient
                                   colors={['#39FF14', '#00E5FF']}
@@ -1333,12 +1373,18 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                               <TouchableOpacity
                                 style={styles.objectiveLockedClaimBtn}
                                 onPress={() => {
-                                  setTargetLevelToPlay(unlockedLevel);
-                                  setIsTargetGameOpen(true);
+                                  const remaining = Math.max(1, quest.target - quest.current);
+                                  Alert.alert(
+                                    'Objective Incomplete',
+                                    `Complete ${remaining} more game${remaining > 1 ? 's' : ''} to unlock this reward!\n\nCurrent progress: ${quest.current}/${quest.target}`
+                                  );
                                 }}
                                 activeOpacity={0.85}
                               >
-                                <Text style={styles.objectiveLockedClaimText}>CLAIM</Text>
+                                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}>
+                                  <Ionicons name="lock-closed" size={10} color="#7A8E7E" style={{ marginRight: 3 }} />
+                                  <Text style={styles.objectiveLockedClaimText}>LOCKED</Text>
+                                </View>
                               </TouchableOpacity>
                             )}
                           </View>
@@ -2364,6 +2410,23 @@ const styles = StyleSheet.create({
   },
 
   // 6. DAILY OBJECTIVES (3 CARDS ROW)
+  resetCountdownRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(0, 229, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(0, 229, 255, 0.2)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginBottom: 10,
+    alignSelf: 'flex-start',
+  },
+  resetCountdownRowText: {
+    color: '#8A9E8D',
+    fontSize: 10.5,
+    fontWeight: '700',
+  },
   dailyObjectivesRow: {
     flexDirection: 'row',
     gap: 8,
