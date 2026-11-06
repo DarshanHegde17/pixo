@@ -53,12 +53,12 @@ export const LogicCodeGameModal = ({
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
   const [pauseModalMode, setPauseModalMode] = useState('pause'); // 'pause' | 'exit_confirm'
-  const frozenTimeLeftRef = useRef(45);
+  const frozenTimeLeftRef = useRef(150);
   const [userSelection, setUserSelection] = useState(null); // For multiple choice / classification
   const [placedOperators, setPlacedOperators] = useState([]); // For missing operator [box0, box1, ...]
   const [activeBoxIdx, setActiveBoxIdx] = useState(0); // Focused operator box
   const [isUntimed, setIsUntimed] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(45);
+  const [timeLeft, setTimeLeft] = useState(150);
   const [score, setScore] = useState(0);
   const [earnedXp, setEarnedXp] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
@@ -67,6 +67,12 @@ export const LogicCodeGameModal = ({
   const [feedback, setFeedback] = useState(null); // { isCorrect, explanation, earnedXp, answer }
   const [answersHistory, setAnswersHistory] = useState([]);
   const [levelVictoryData, setLevelVictoryData] = useState(null);
+  const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [placedOperatorsByQ, setPlacedOperatorsByQ] = useState({});
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const isSubmittingRef = useRef(false);
+  const [quizReport, setQuizReport] = useState(null);
+  const [allQuizResults, setAllQuizResults] = useState({});
 
   const timerRef = useRef(null);
 
@@ -85,7 +91,7 @@ export const LogicCodeGameModal = ({
         }
         setScreen('category_levels');
       } else if (route.id === 'cyber_strike_gameplay') {
-        setScreen('playing');
+        setScreen((prev) => (prev === 'quiz_report' ? 'quiz_report' : 'playing'));
       } else if (['home', 'games', 'quests', 'store', 'profile'].includes(route.id)) {
         if (onClose) onClose();
       }
@@ -113,16 +119,18 @@ export const LogicCodeGameModal = ({
   const refreshUserProgress = useCallback(async () => {
     if (!user?.id) return;
     try {
-      const [unlocked, completed, stats, resume] = await Promise.all([
+      const [unlocked, completed, stats, resume, results] = await Promise.all([
         LogicCodePersistenceService.getUnlockedLevel(user.id),
         LogicCodePersistenceService.getCompletedLevels(user.id),
         LogicCodePersistenceService.getStats(user.id),
         LogicCodePersistenceService.getActiveSession(user.id),
+        LogicCodePersistenceService.getAllQuizResults(user.id),
       ]);
       setUnlockedLevel(unlocked);
       setCompletedLevels(completed);
       setPlayerStats(stats);
       setActiveResumeSession(resume);
+      setAllQuizResults(results || {});
     } catch (err) {
       console.warn('Error loading Logic Code progress:', err);
     }
@@ -139,16 +147,16 @@ export const LogicCodeGameModal = ({
   }, [visible, initialCategory, refreshUserProgress]);
 
   // -------------------------------------------------------------------------
-  // Timer Management
+  // Timer Management (Level Quiz Timer)
   // -------------------------------------------------------------------------
   useEffect(() => {
-    if (screen === 'playing' && !isUntimed && feedback === null) {
+    if (screen === 'playing' && !isUntimed) {
       if (timerRef.current) clearInterval(timerRef.current);
       timerRef.current = setInterval(() => {
         setTimeLeft((prev) => {
           if (prev <= 1) {
             clearInterval(timerRef.current);
-            handleTimeExpired();
+            handleSubmitQuiz();
             return 0;
           }
           return prev - 1;
@@ -161,14 +169,7 @@ export const LogicCodeGameModal = ({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [screen, isUntimed, feedback]);
-
-  const handleTimeExpired = () => {
-    // Time expired for this question: mark incorrect and show explanation
-    const currentQ = questions[currentQuestionIdx];
-    if (!currentQ) return;
-    handleSubmitAnswer(null, true);
-  };
+  }, [screen, isUntimed]);
 
   // -------------------------------------------------------------------------
   // Game Session Actions (Start / Resume / Save)
@@ -181,15 +182,22 @@ export const LogicCodeGameModal = ({
     }
 
     const generated = LogicCodeQuestionService.generateLevelQuestions(num);
-    const initialPlacedOps = generated[0]?.type === 'missing_operator' ? Array(generated[0].opCount).fill(null) : [];
+    const initialPlacedOps = {};
+    generated.forEach((q, idx) => {
+      if (q?.type === 'missing_operator' || q?.isOperatorPuzzle) {
+        initialPlacedOps[idx] = Array(q.opCount || (q.numbers ? q.numbers.length - 1 : 1)).fill(null);
+      }
+    });
 
     setSelectedLevel(num);
     setQuestions(generated);
     setCurrentQuestionIdx(0);
+    setSelectedAnswers({});
+    setPlacedOperatorsByQ(initialPlacedOps);
     setUserSelection(null);
-    setPlacedOperators(initialPlacedOps);
+    setPlacedOperators(initialPlacedOps[0] || []);
     setActiveBoxIdx(0);
-    setTimeLeft(45);
+    setTimeLeft(150);
     setScore(0);
     setEarnedXp(0);
     setCorrectCount(0);
@@ -198,6 +206,9 @@ export const LogicCodeGameModal = ({
     setFeedback(null);
     setAnswersHistory([]);
     setLevelVictoryData(null);
+    setQuizReport(null);
+    setIsSubmitting(false);
+    isSubmittingRef.current = false;
     NavigationService.navigate('cyber_strike_gameplay', { level: num, categoryId: selectedCategory.id });
     setScreen('playing');
 
@@ -208,10 +219,10 @@ export const LogicCodeGameModal = ({
         category: selectedCategory.id,
         questions: generated,
         currentQuestionIdx: 0,
+        selectedAnswers: {},
+        placedOperatorsByQ: initialPlacedOps,
         score: 0,
-        earnedXp: 0,
-        correctCount: 0,
-        answersHistory: [],
+        timeLeft: 150,
         status: 'in_progress',
       });
       setActiveResumeSession(null);
@@ -226,12 +237,18 @@ export const LogicCodeGameModal = ({
     setSelectedCategory(cat);
     setSelectedLevel(sess.level);
     setQuestions(sess.questions);
-    setCurrentQuestionIdx(sess.currentQuestionIdx || 0);
-    setUserSelection(null);
-    const q = sess.questions[sess.currentQuestionIdx || 0];
-    setPlacedOperators(q?.type === 'missing_operator' ? Array(q.opCount).fill(null) : []);
+    const resumeIdx = Math.min(sess.questions.length - 1, sess.currentQuestionIdx || 0);
+    setCurrentQuestionIdx(resumeIdx);
+    const savedAnswers = sess.selectedAnswers || {};
+    setSelectedAnswers(savedAnswers);
+    const savedOps = sess.placedOperatorsByQ || {};
+    setPlacedOperatorsByQ(savedOps);
+    setUserSelection(savedAnswers[resumeIdx] ?? null);
+    const q = sess.questions[resumeIdx];
+    const initialOps = q?.type === 'missing_operator' || q?.isOperatorPuzzle ? Array(q.opCount || (q.numbers ? q.numbers.length - 1 : 1)).fill(null) : [];
+    setPlacedOperators(savedOps[resumeIdx] || initialOps);
     setActiveBoxIdx(0);
-    setTimeLeft(sess.timeLeft || 45);
+    setTimeLeft(sess.timeLeft || 150);
     setScore(sess.score || 0);
     setEarnedXp(sess.earnedXp || 0);
     setCorrectCount(sess.correctCount || 0);
@@ -239,6 +256,9 @@ export const LogicCodeGameModal = ({
     setHintUsedForQuestion(false);
     setFeedback(null);
     setAnswersHistory(sess.answersHistory || []);
+    setIsSubmitting(false);
+    isSubmittingRef.current = false;
+    setQuizReport(null);
     NavigationService.navigate('cyber_strike_gameplay', { level: sess.level, categoryId: cat.id });
     setScreen('playing');
   };
@@ -251,146 +271,113 @@ export const LogicCodeGameModal = ({
   };
 
   // -------------------------------------------------------------------------
-  // Question Answering & Verification
+  // Question Selection & Navigation Handlers
   // -------------------------------------------------------------------------
-  const handleSubmitAnswer = async (forcedSelection = null, isTimeout = false) => {
-    const currentQ = questions[currentQuestionIdx];
-    if (!currentQ) return;
+  const handleSelectOption = (choice) => {
+    setUserSelection(choice);
+    const updated = { ...selectedAnswers, [currentQuestionIdx]: choice };
+    setSelectedAnswers(updated);
 
-    let isCorrect = false;
-    let givenAnswer = null;
-
-    if (isTimeout) {
-      isCorrect = false;
-      givenAnswer = 'Time Expired';
-    } else if (currentQ.type === 'missing_operator') {
-      const ops = placedOperators;
-      if (ops.includes(null)) {
-        Alert.alert('Incomplete Equation', 'Please place all missing mathematical operators in the boxes.');
-        return;
-      }
-      const opMap = { '+': '+', '−': '-', '×': '*', '÷': '/' };
-      const mathOps = ops.map((op) => opMap[op] || op);
-      isCorrect = isValidOperatorSolution(currentQ.numbers, mathOps, currentQ.target);
-      givenAnswer = ops.join('  ');
-    } else {
-      const choice = forcedSelection !== null ? forcedSelection : userSelection;
-      if (choice === null) {
-        Alert.alert('Selection Required', 'Please choose an answer option to submit.');
-        return;
-      }
-      isCorrect = String(choice) === String(currentQ.correctAnswer);
-      givenAnswer = choice;
-    }
-
-    // Reward calculation: +10 XP for correct, +5 XP no-hint bonus
-    let xpGain = 0;
-    if (isCorrect) {
-      xpGain = 10;
-      if (!hintUsedForQuestion) {
-        xpGain += 5; // 5 XP no-hint bonus
-      }
-    }
-
-    const points = isCorrect ? Math.floor(800 + (timeLeft > 0 ? timeLeft * 10 : 0)) : 0;
-    const newScore = score + points;
-    const newEarnedXp = earnedXp + xpGain;
-    const newCorrectCount = isCorrect ? correctCount + 1 : correctCount;
-
-    setScore(newScore);
-    setEarnedXp(newEarnedXp);
-    setCorrectCount(newCorrectCount);
-
-    const resultRecord = {
-      questionIdx: currentQuestionIdx,
-      isCorrect,
-      givenAnswer,
-      correctAnswer: currentQ.correctAnswer || currentQ.validSolutions?.[0]?.join('  '),
-      xpGain,
-      explanation: currentQ.explanation,
-    };
-
-    const newHistory = [...answersHistory, resultRecord];
-    setAnswersHistory(newHistory);
-
-    // Record question attempt in persistent stats
     if (user?.id) {
-      await LogicCodePersistenceService.recordQuestionAttempt(user.id, {
-        isCorrect,
-        timeSeconds: 45 - timeLeft,
-        xpEarned: xpGain,
-      });
-
-      // Update resume state
-      await LogicCodePersistenceService.saveActiveSession(user.id, {
+      LogicCodePersistenceService.saveActiveSession(user.id, {
         level: selectedLevel,
         category: selectedCategory.id,
         questions,
-        currentQuestionIdx: currentQuestionIdx + 1,
-        score: newScore,
-        earnedXp: newEarnedXp,
-        correctCount: newCorrectCount,
-        answersHistory: newHistory,
+        currentQuestionIdx,
+        selectedAnswers: updated,
+        placedOperatorsByQ,
+        score,
+        timeLeft,
         status: 'in_progress',
-      });
-    }
-
-    setFeedback({
-      isCorrect,
-      givenAnswer,
-      correctAnswer: currentQ.correctAnswer || currentQ.validSolutions?.[0]?.join('  '),
-      explanation: currentQ.explanation,
-      xpGain,
-    });
-  };
-
-  const handleNextQuestion = async () => {
-    setFeedback(null);
-    setIsHintOpen(false);
-    setHintUsedForQuestion(false);
-    setUserSelection(null);
-
-    const nextIdx = currentQuestionIdx + 1;
-    if (nextIdx >= questions.length) {
-      // LEVEL COMPLETE!
-      await handleLevelComplete();
-    } else {
-      setCurrentQuestionIdx(nextIdx);
-      const nextQ = questions[nextIdx];
-      setPlacedOperators(nextQ?.type === 'missing_operator' ? Array(nextQ.opCount).fill(null) : []);
-      setActiveBoxIdx(0);
-      setTimeLeft(45);
+      }).catch(() => {});
     }
   };
 
-  const handleLevelComplete = async () => {
-    if (timerRef.current) clearInterval(timerRef.current);
+  const handlePlaceOperator = (op) => {
+    const curQ = questions[currentQuestionIdx];
+    const expected = curQ?.opCount || (curQ?.numbers ? curQ.numbers.length - 1 : 1);
+    const currentOps = placedOperatorsByQ[currentQuestionIdx] || Array(expected).fill(null);
+    const updatedOps = [...currentOps];
+    updatedOps[activeBoxIdx] = op;
+    setPlacedOperators(updatedOps);
+    const updatedByQ = { ...placedOperatorsByQ, [currentQuestionIdx]: updatedOps };
+    setPlacedOperatorsByQ(updatedByQ);
+
+    if (activeBoxIdx < expected - 1) {
+      setActiveBoxIdx(activeBoxIdx + 1);
+    }
 
     if (user?.id) {
-      try {
-        const victoryRes = await LogicCodePersistenceService.completeLevel(user.id, selectedLevel, {
-          correctCount,
-          totalQuestions: questions.length,
-          score,
-          durationSeconds: 120,
-          earnedQuestionXp: earnedXp,
-        });
+      LogicCodePersistenceService.saveActiveSession(user.id, {
+        level: selectedLevel,
+        category: selectedCategory.id,
+        questions,
+        currentQuestionIdx,
+        selectedAnswers,
+        placedOperatorsByQ: updatedByQ,
+        score,
+        timeLeft,
+        status: 'in_progress',
+      }).catch(() => {});
+    }
+  };
 
-        setLevelVictoryData(victoryRes);
+  const jumpToQuestion = (targetIdx) => {
+    if (targetIdx < 0 || targetIdx >= questions.length) return;
+    setCurrentQuestionIdx(targetIdx);
+    const targetQ = questions[targetIdx];
+    setUserSelection(selectedAnswers[targetIdx] ?? null);
+    const expected = targetQ?.opCount || (targetQ?.numbers ? targetQ.numbers.length - 1 : 1);
+    const targetOps = placedOperatorsByQ[targetIdx] || (targetQ?.type === 'missing_operator' || targetQ?.isOperatorPuzzle ? Array(expected).fill(null) : []);
+    setPlacedOperators(targetOps);
+    setActiveBoxIdx(0);
+    setIsHintOpen(false);
+  };
 
-        // Add earned XP to auth state if applicable
-        if (addXp && victoryRes.xpAwarded > 0) {
-          await addXp(victoryRes.xpAwarded);
-        }
+  const handlePrevQuestion = () => {
+    jumpToQuestion(currentQuestionIdx - 1);
+  };
 
-        await refreshUserProgress();
-        if (onSessionComplete) onSessionComplete();
-      } catch (err) {
-        console.warn('Error completing Logic Code level:', err);
-      }
+  const handleNextQuestionNav = () => {
+    jumpToQuestion(currentQuestionIdx + 1);
+  };
+
+  const handleSubmitQuiz = async () => {
+    if (isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
+    setIsSubmitting(true);
+
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
     }
 
-    setScreen('level_complete');
+    try {
+      const elapsedSeconds = Math.max(1, 150 - timeLeft);
+      const report = await LogicCodePersistenceService.processQuizSubmission(user?.id, selectedLevel, {
+        questions,
+        selectedAnswers,
+        placedOperatorsByQ,
+        durationSeconds: elapsedSeconds,
+      });
+
+      setQuizReport(report);
+
+      if (report.isPass && report.xpAwarded > 0 && addXp) {
+        await addXp(report.xpAwarded);
+      }
+
+      await refreshUserProgress();
+      if (onSessionComplete) onSessionComplete();
+
+      setScreen('quiz_report');
+    } catch (err) {
+      console.warn('Error submitting quiz:', err);
+      Alert.alert('Evaluation Error', 'Failed to evaluate quiz submission. Please retry.');
+    } finally {
+      isSubmittingRef.current = false;
+      setIsSubmitting(false);
+    }
   };
 
   // Close handler: save progress if in_progress, then close
@@ -401,28 +388,30 @@ export const LogicCodeGameModal = ({
         category: selectedCategory.id,
         questions,
         currentQuestionIdx,
+        selectedAnswers,
+        placedOperatorsByQ,
         score,
-        earnedXp,
-        correctCount,
-        answersHistory,
+        timeLeft,
         status: 'in_progress',
       });
     }
     if (timerRef.current) clearInterval(timerRef.current);
     onClose();
-  }, [screen, user?.id, questions, currentQuestionIdx, selectedLevel, selectedCategory, score, earnedXp, correctCount, answersHistory, onClose]);
+  }, [screen, user?.id, questions, currentQuestionIdx, selectedAnswers, placedOperatorsByQ, selectedLevel, selectedCategory, score, timeLeft, onClose]);
 
-  // Handle Pause Mission (Back button during active gameplay)
-  // Handle Back Button Requested (Exit Confirmation Dialog)
+  // Handle Back Button Requested
   const handleBackRequested = useCallback(() => {
     if (screen === 'playing') {
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
-      frozenTimeLeftRef.current = timeLeft || 45;
+      frozenTimeLeftRef.current = timeLeft || 150;
       setPauseModalMode('exit_confirm');
       setIsPauseModalOpen(true);
+    } else if (screen === 'quiz_report' || screen === 'level_complete') {
+      setScreen('category_levels');
+      NavigationService.navigate('cyber_strike_levels', { categoryId: selectedCategory.id });
     } else if (screen === 'category_levels') {
       setScreen('dashboard');
       NavigationService.navigate('cyber_strike');
@@ -430,7 +419,7 @@ export const LogicCodeGameModal = ({
       if (onClose) onClose();
       NavigationService.navigateToDashboard();
     }
-  }, [screen, timeLeft, onClose]);
+  }, [screen, timeLeft, selectedCategory, onClose]);
 
   // Handle Pause Menu Trigger (Pause Button)
   const handlePauseMission = useCallback(() => {
@@ -441,7 +430,7 @@ export const LogicCodeGameModal = ({
       timerRef.current = null;
     }
 
-    frozenTimeLeftRef.current = timeLeft || 45;
+    frozenTimeLeftRef.current = timeLeft || 150;
     setPauseModalMode('pause');
     setIsPauseModalOpen(true);
   }, [screen, timeLeft]);
@@ -464,10 +453,9 @@ export const LogicCodeGameModal = ({
         category: selectedCategory.id,
         questions,
         currentQuestionIdx,
+        selectedAnswers,
+        placedOperatorsByQ,
         score,
-        earnedXp,
-        correctCount,
-        answersHistory,
         timeLeft: frozenTimeLeftRef.current || timeLeft,
         status: 'SAVED',
       });
@@ -477,9 +465,9 @@ export const LogicCodeGameModal = ({
     setScreen('dashboard');
     if (onClose) onClose();
     NavigationService.navigateToDashboard();
-  }, [user?.id, selectedLevel, selectedCategory, questions, currentQuestionIdx, score, earnedXp, correctCount, answersHistory, timeLeft, onClose]);
+  }, [user?.id, selectedLevel, selectedCategory, questions, currentQuestionIdx, selectedAnswers, placedOperatorsByQ, score, timeLeft, onClose]);
 
-  // Handle Direct Return to Dashboard (from Victory screen)
+  // Handle Direct Return to Dashboard
   const handleReturnToDashboard = useCallback(() => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -506,6 +494,11 @@ export const LogicCodeGameModal = ({
           handleBackRequested();
           return true;
         }
+        if (screen === 'quiz_report' || screen === 'level_complete') {
+          setScreen('category_levels');
+          NavigationService.navigate('cyber_strike_levels', { categoryId: selectedCategory.id });
+          return true;
+        }
         if (screen === 'category_levels') {
           setScreen('dashboard');
           NavigationService.navigate('cyber_strike');
@@ -517,7 +510,7 @@ export const LogicCodeGameModal = ({
     );
 
     return unregister;
-  }, [visible, screen, isPauseModalOpen, handleResumeMission, handleBackRequested]);
+  }, [visible, screen, isPauseModalOpen, selectedCategory, handleResumeMission, handleBackRequested]);
 
   if (!visible) return null;
 
@@ -810,8 +803,19 @@ export const LogicCodeGameModal = ({
                             </Text>
                           </View>
 
-                          <Text style={[styles.levelCardSub, isLocked && { color: '#666' }]}>
-                            {isLocked ? `Complete L${lvl - 1}` : isCompleted ? 'Cleared ✓' : 'Available'}
+                          <Text
+                            style={[
+                              styles.levelCardSub,
+                              isCompleted && { color: '#39FF14', fontWeight: '800' },
+                              !isLocked && !isCompleted && { color: '#00E5FF', fontWeight: '800' },
+                              isLocked && { color: '#666' },
+                            ]}
+                          >
+                            {isCompleted
+                              ? 'COMPLETED'
+                              : !isLocked
+                              ? 'UNLOCKED'
+                              : 'LOCKED'}
                           </Text>
 
                           <View style={styles.rewardPill}>
@@ -906,18 +910,33 @@ export const LogicCodeGameModal = ({
                   </TouchableOpacity>
                 </View>
 
-                {/* 5-Step Segmented Progress Bar */}
+                {/* Interactive Multi-Step Quiz Progress Bar */}
                 <View style={styles.stepProgressBar}>
-                  {questions.map((_, idx) => (
-                    <View
-                      key={idx}
-                      style={[
-                        styles.progressStep,
-                        idx < currentQuestionIdx && styles.progressStepDone,
-                        idx === currentQuestionIdx && styles.progressStepActive,
-                      ]}
-                    />
-                  ))}
+                  {questions.map((_, idx) => {
+                    const isAnswered =
+                      (selectedAnswers[idx] !== undefined &&
+                        selectedAnswers[idx] !== null &&
+                        selectedAnswers[idx] !== '') ||
+                      (placedOperatorsByQ[idx] && placedOperatorsByQ[idx].filter(Boolean).length > 0);
+                    const isActive = idx === currentQuestionIdx;
+
+                    return (
+                      <TouchableOpacity
+                        key={idx}
+                        style={[
+                          styles.progressStep,
+                          isAnswered && styles.progressStepDone,
+                          isActive && styles.progressStepActive,
+                        ]}
+                        onPress={() => jumpToQuestion(idx)}
+                        activeOpacity={0.8}
+                      >
+                        <Text style={[styles.progressStepNum, isActive && styles.progressStepNumActive]}>
+                          Q{idx + 1}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
                 </View>
 
                 {/* Main Question View (Scrollable on small screens) */}
@@ -980,15 +999,7 @@ export const LogicCodeGameModal = ({
                           <TouchableOpacity
                             key={op}
                             style={styles.paletteOpBtn}
-                            onPress={() => {
-                              const updated = [...placedOperators];
-                              updated[activeBoxIdx] = op;
-                              setPlacedOperators(updated);
-                              // Auto advance active box
-                              if (activeBoxIdx < currentQ.opCount - 1) {
-                                setActiveBoxIdx(activeBoxIdx + 1);
-                              }
-                            }}
+                            onPress={() => handlePlaceOperator(op)}
                             activeOpacity={0.8}
                           >
                             <LinearGradient colors={['#172E1E', '#0A170F']} style={styles.paletteOpGradient}>
@@ -1006,7 +1017,7 @@ export const LogicCodeGameModal = ({
                   {currentQ.type !== 'missing_operator' && Array.isArray(currentQ.options) && (
                     <View style={styles.optionsGrid}>
                       {currentQ.options.map((opt, i) => {
-                        const isSelected = userSelection === opt;
+                        const isSelected = String(userSelection) === String(opt);
                         return (
                           <TouchableOpacity
                             key={i}
@@ -1014,7 +1025,7 @@ export const LogicCodeGameModal = ({
                               styles.choiceCard,
                               isSelected && styles.choiceCardSelected,
                             ]}
-                            onPress={() => setUserSelection(opt)}
+                            onPress={() => handleSelectOption(opt)}
                             activeOpacity={0.8}
                           >
                             <View style={[styles.choiceIndexCircle, isSelected && styles.choiceIndexCircleSelected]}>
@@ -1025,6 +1036,9 @@ export const LogicCodeGameModal = ({
                             <Text style={[styles.choiceText, isSelected && styles.choiceTextSelected]}>
                               {String(opt)}
                             </Text>
+                            {isSelected && (
+                              <Ionicons name="checkmark-circle" size={18} color="#39FF14" style={{ marginLeft: 'auto' }} />
+                            )}
                           </TouchableOpacity>
                         );
                       })}
@@ -1043,190 +1057,307 @@ export const LogicCodeGameModal = ({
                   )}
                 </ScrollView>
 
-                {/* Bottom Action Controls */}
-                <View style={styles.gameplayFooter}>
-                  <TouchableOpacity
-                    style={[styles.hintBtn, isHintOpen && styles.hintBtnActive]}
-                    onPress={() => {
-                      setIsHintOpen(!isHintOpen);
-                      setHintUsedForQuestion(true);
-                    }}
-                  >
-                    <Ionicons name="bulb-outline" size={16} color={isHintOpen ? '#050705' : '#FFD700'} style={{ marginRight: 6 }} />
-                    <Text style={[styles.hintBtnText, isHintOpen && { color: '#050705' }]}>
-                      {isHintOpen ? 'HIDE HINT' : 'HINT (-5 XP BONUS)'}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.submitBtn}
-                    onPress={() => handleSubmitAnswer()}
-                    activeOpacity={0.85}
-                  >
-                    <LinearGradient colors={['#39FF14', '#00E5FF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.submitBtnGradient}>
-                      <Text style={styles.submitBtnText}>SUBMIT ANSWER ↵</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
-            {/* ======================================================= */}
-            {/* SCREEN 4: POST-ANSWER REVIEW / EXPLANATION MODAL       */}
-            {/* ======================================================= */}
-            {feedback && (
-              <View style={styles.feedbackOverlay}>
-                <View style={[styles.feedbackCard, feedback.isCorrect ? styles.feedbackCardCorrect : styles.feedbackCardWrong]}>
-                  <View style={styles.feedbackHeaderRow}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Ionicons
-                        name={feedback.isCorrect ? 'checkmark-circle' : 'close-circle'}
-                        size={24}
-                        color={feedback.isCorrect ? '#39FF14' : '#FF3B30'}
-                        style={{ marginRight: 8 }}
-                      />
-                      <Text style={[styles.feedbackStatusText, { color: feedback.isCorrect ? '#39FF14' : '#FF3B30' }]}>
-                        {feedback.isCorrect ? 'CORRECT CALCULATION!' : 'INCORRECT'}
-                      </Text>
-                    </View>
-                    <Text style={styles.feedbackXpPill}>+{feedback.xpGain} XP</Text>
-                  </View>
-
-                  <Text style={styles.feedbackCorrectAns}>
-                    Correct Answer: <Text style={{ color: '#FFFFFF', fontWeight: '900' }}>{String(feedback.correctAnswer)}</Text>
-                  </Text>
-
-                  <View style={styles.explanationBox}>
-                    <Text style={styles.explanationLabel}>STEP-BY-STEP EXPLANATION:</Text>
-                    <Text style={styles.explanationText}>{feedback.explanation}</Text>
-                  </View>
-
-                  <TouchableOpacity style={styles.nextQuestionBtn} onPress={handleNextQuestion} activeOpacity={0.85}>
-                    <LinearGradient colors={['#39FF14', '#00E5FF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.nextBtnGradient}>
-                      <Text style={styles.nextBtnText}>
-                        {currentQuestionIdx + 1 >= questions.length ? 'VIEW MISSION RESULTS →' : 'NEXT QUESTION →'}
-                      </Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
-            {/* ======================================================= */}
-            {/* SCREEN 5: LEVEL COMPLETE / VICTORY                     */}
-            {/* ======================================================= */}
-            {screen === 'level_complete' && levelVictoryData && (
-              <ScrollView style={styles.scrollBody} contentContainerStyle={styles.victoryContent}>
-                <View style={styles.victoryIconCircle}>
-                  <Ionicons name="trophy" size={54} color="#39FF14" />
-                </View>
-
-                <Text style={styles.victoryHeading}>MISSION ACCOMPLISHED!</Text>
-                <Text style={styles.victorySub}>
-                  {levelVictoryData.isPerfect ? '⚡ FLAWLESS S-RANK EXECUTION ⚡' : 'Level Cleared Successfully'}
-                </Text>
-
-                {/* Score & Rewards Breakdown */}
-                <View style={styles.victoryStatsBox}>
-                  <View style={styles.victoryStatRow}>
-                    <Text style={styles.victoryStatLabel}>Level Cleared:</Text>
-                    <Text style={styles.victoryStatVal}>Level {selectedLevel}</Text>
-                  </View>
-                  <View style={styles.victoryStatRow}>
-                    <Text style={styles.victoryStatLabel}>Correct Answers:</Text>
-                    <Text style={styles.victoryStatVal}>{correctCount} / {questions.length}</Text>
-                  </View>
-                  <View style={styles.victoryStatRow}>
-                    <Text style={styles.victoryStatLabel}>Mission Score:</Text>
-                    <Text style={styles.victoryStatVal}>{score} PTS</Text>
-                  </View>
-                  <View style={styles.victoryStatRow}>
-                    <Text style={styles.victoryStatLabel}>XP Awarded:</Text>
-                    <Text style={[styles.victoryStatVal, { color: '#39FF14' }]}>
-                      +{levelVictoryData.xpAwarded} XP
-                    </Text>
-                  </View>
-                  {levelVictoryData.coinsAwarded > 0 && (
-                    <View style={styles.victoryStatRow}>
-                      <Text style={styles.victoryStatLabel}>Coins Awarded:</Text>
-                      <Text style={[styles.victoryStatVal, { color: '#FFD700' }]}>
-                        +{levelVictoryData.coinsAwarded} Coins
-                      </Text>
-                    </View>
-                  )}
-                  <View style={styles.victoryStatRow}>
-                    <Text style={styles.victoryStatLabel}>Next Level Unlocked:</Text>
-                    <Text style={[styles.victoryStatVal, { color: '#00E5FF' }]}>
-                      Level {levelVictoryData.unlockedLevel}
-                    </Text>
-                  </View>
-                </View>
-
-                {/* Badges notification if level 10, 20, 30, 40 */}
-                {selectedLevel === 10 && (
-                  <View style={styles.badgeAwardBanner}>
-                    <Ionicons name="ribbon" size={20} color="#39FF14" style={{ marginRight: 8 }} />
-                    <Text style={styles.badgeAwardText}>BADGE UNLOCKED: PATTERN HACKER!</Text>
-                  </View>
-                )}
-                {selectedLevel === 20 && (
-                  <View style={styles.badgeAwardBanner}>
-                    <Ionicons name="ribbon" size={20} color="#00E5FF" style={{ marginRight: 8 }} />
-                    <Text style={styles.badgeAwardText}>BADGE UNLOCKED: NUMBER SLEUTH!</Text>
-                  </View>
-                )}
-                {selectedLevel === 30 && (
-                  <View style={styles.badgeAwardBanner}>
-                    <Ionicons name="ribbon" size={20} color="#FFD700" style={{ marginRight: 8 }} />
-                    <Text style={styles.badgeAwardText}>BADGE UNLOCKED: QUANTUM ROOTER!</Text>
-                  </View>
-                )}
-                {selectedLevel === 40 && (
-                  <View style={styles.badgeAwardBanner}>
-                    <Ionicons name="trophy" size={22} color="#FF3B30" style={{ marginRight: 8 }} />
-                    <Text style={[styles.badgeAwardText, { color: '#FF3B30' }]}>
-                      👑 ULTIMATE LOGIC MASTER BADGE EARNED! 👑
-                    </Text>
-                  </View>
-                )}
-
-                {/* Victory Actions */}
-                <View style={styles.victoryActions}>
-                  {selectedLevel < 40 ? (
+                {/* Bottom Action Controls (Quiz Navigation & Submission) */}
+                <View style={styles.quizNavFooter}>
+                  {currentQuestionIdx > 0 ? (
                     <TouchableOpacity
-                      style={styles.advanceBtn}
-                      onPress={() => startLevel(selectedLevel + 1)}
+                      style={styles.quizPrevBtn}
+                      onPress={handlePrevQuestion}
                       activeOpacity={0.85}
                     >
-                      <LinearGradient colors={['#39FF14', '#00E5FF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.startBtnGradient}>
-                        <Text style={styles.advanceBtnText}>ADVANCE TO LEVEL {selectedLevel + 1} →</Text>
+                      <Ionicons name="arrow-back" size={16} color="#39FF14" style={{ marginRight: 4 }} />
+                      <Text style={styles.quizPrevBtnText}>PREV</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      style={[styles.quizPrevBtn, { borderColor: 'rgba(255, 215, 0, 0.4)' }]}
+                      onPress={() => setIsHintOpen(!isHintOpen)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="bulb-outline" size={15} color="#FFD700" style={{ marginRight: 4 }} />
+                      <Text style={[styles.quizPrevBtnText, { color: '#FFD700' }]}>{isHintOpen ? 'HIDE HINT' : 'HINT'}</Text>
+                    </TouchableOpacity>
+                  )}
+
+                  <View style={styles.quizCounterWrap}>
+                    <Text style={styles.quizCounterText}>
+                      QUESTION {currentQuestionIdx + 1} OF {questions.length}
+                    </Text>
+                  </View>
+
+                  {currentQuestionIdx < questions.length - 1 ? (
+                    <TouchableOpacity
+                      style={styles.quizNextBtn}
+                      onPress={handleNextQuestionNav}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient colors={['#172E1E', '#0B170F']} style={styles.quizNextBtnGradient}>
+                        <Text style={styles.quizNextBtnText}>NEXT QUESTION →</Text>
                       </LinearGradient>
                     </TouchableOpacity>
                   ) : (
-                    <View style={styles.allClearedCard}>
-                      <Text style={styles.allClearedText}>🏆 ALL 40 LOGIC CODE MISSIONS CLEARED! 🏆</Text>
-                    </View>
+                    <TouchableOpacity
+                      style={styles.quizSubmitBtn}
+                      onPress={handleSubmitQuiz}
+                      disabled={isSubmitting}
+                      activeOpacity={0.85}
+                    >
+                      <LinearGradient
+                        colors={['#39FF14', '#00E5FF']}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 0 }}
+                        style={styles.quizSubmitBtnGradient}
+                      >
+                        <Ionicons name="checkmark-done-circle" size={18} color="#050705" style={{ marginRight: 6 }} />
+                        <Text style={styles.quizSubmitBtnText}>
+                          {isSubmitting ? 'EVALUATING...' : 'SUBMIT QUIZ'}
+                        </Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
                   )}
+                </View>
+              </View>
+            )}
 
-                  <TouchableOpacity
-                    style={styles.returnDashboardBtn}
-                    onPress={handleReturnToDashboard}
-                    activeOpacity={0.85}
-                    accessibilityLabel="Return directly to PIXO dashboard"
-                  >
-                    <LinearGradient colors={['#0F2414', '#09150C']} style={styles.dashboardBtnGradient}>
-                      <Ionicons name="home" size={15} color="#39FF14" style={{ marginRight: 6 }} />
-                      <Text style={styles.returnDashboardBtnText}>RETURN TO DASHBOARD</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
+            {/* ======================================================= */}
+            {/* SCREEN 4: AUTOMATIC RESULT REPORT (PASS & FAIL FLOW)   */}
+            {/* ======================================================= */}
+            {(screen === 'quiz_report' || (screen === 'level_complete' && quizReport)) && quizReport && (
+              <ScrollView style={styles.scrollBody} contentContainerStyle={styles.reportScrollContent}>
+                {/* PASS / FAIL Hero Banner */}
+                <View style={[styles.reportHeroCard, quizReport.isPass ? styles.reportHeroPass : styles.reportHeroFail]}>
+                  <View style={styles.reportStatusHeaderRow}>
+                    <View style={[styles.reportStatusBadge, quizReport.isPass ? styles.badgePass : styles.badgeFail]}>
+                      <Ionicons
+                        name={quizReport.isPass ? 'checkmark-circle' : 'close-circle'}
+                        size={18}
+                        color={quizReport.isPass ? '#39FF14' : '#FF3B30'}
+                        style={{ marginRight: 6 }}
+                      />
+                      <Text style={[styles.reportStatusBadgeText, { color: quizReport.isPass ? '#39FF14' : '#FF3B30' }]}>
+                        {quizReport.status} • {quizReport.scorePercentage}%
+                      </Text>
+                    </View>
+                    <Text style={styles.reportTimestampText}>
+                      {new Date(quizReport.submittedAt).toLocaleDateString('en-US', {
+                        month: 'short',
+                        day: 'numeric',
+                        year: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
 
-                  <TouchableOpacity style={styles.replayBtn} onPress={() => startLevel(selectedLevel)}>
-                    <Text style={styles.replayBtnText}>REPLAY LEVEL {selectedLevel}</Text>
-                  </TouchableOpacity>
+                  <View style={styles.reportHeroIconWrap}>
+                    <Ionicons
+                      name={quizReport.isPass ? 'trophy' : 'shield-half'}
+                      size={54}
+                      color={quizReport.isPass ? '#39FF14' : '#FF3B30'}
+                    />
+                  </View>
 
-                  <TouchableOpacity style={styles.returnHubBtn} onPress={() => setScreen('dashboard')}>
-                    <Text style={styles.returnHubBtnText}>RETURN TO HUB</Text>
-                  </TouchableOpacity>
+                  <Text style={[styles.reportHeroTitle, { color: quizReport.isPass ? '#39FF14' : '#FF3B30' }]}>
+                    {quizReport.isPass ? 'MISSION COMPLETED – LEVEL CLEARED!' : 'MISSION FAILED – TRAINING REQUIRED!'}
+                  </Text>
+                  <Text style={styles.reportHeroSub}>
+                    {quizReport.isPass
+                      ? 'Clearance threshold (>50%) achieved. Next security sector unlocked.'
+                      : 'Passing requires MORE than 50% accuracy. Next sector remains locked.'}
+                  </Text>
+
+                  {/* Progress Bar with 50% Pass Threshold Line */}
+                  <View style={styles.scoreProgressSection}>
+                    <View style={styles.scoreProgressLabelRow}>
+                      <Text style={styles.scoreProgressLabel}>SCORE PERCENTAGE</Text>
+                      <Text style={[styles.scoreProgressValue, { color: quizReport.isPass ? '#39FF14' : '#FF3B30' }]}>
+                        {quizReport.scorePercentage}%
+                      </Text>
+                    </View>
+
+                    <View style={styles.scoreTrack}>
+                      {/* 50% Threshold Marker */}
+                      <View style={styles.passThresholdMarker}>
+                        <View style={styles.passThresholdLine} />
+                        <Text style={styles.passThresholdText}>PASS 50%</Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.scoreFill,
+                          {
+                            width: `${Math.min(100, Math.max(0, quizReport.scorePercentage))}%`,
+                            backgroundColor: quizReport.isPass ? '#39FF14' : '#FF3B30',
+                          },
+                        ]}
+                      />
+                    </View>
+                  </View>
+                </View>
+
+                {/* Metadata Card: Player Name, Level, Questions */}
+                <View style={styles.reportMetaCard}>
+                  <View style={styles.reportMetaRow}>
+                    <View style={styles.reportMetaItem}>
+                      <Text style={styles.reportMetaLabel}>OPERATIVE</Text>
+                      <Text style={styles.reportMetaVal}>{user?.username || user?.displayName || user?.name || 'Cyber Agent'}</Text>
+                    </View>
+                    <View style={styles.reportMetaDivider} />
+                    <View style={styles.reportMetaItem}>
+                      <Text style={styles.reportMetaLabel}>SECTOR</Text>
+                      <Text style={styles.reportMetaVal}>Level {quizReport.level} • {selectedCategory.title}</Text>
+                    </View>
+                  </View>
+
+                  <View style={styles.reportStatsGrid}>
+                    <View style={styles.reportStatBox}>
+                      <Text style={styles.reportStatBoxLabel}>TOTAL</Text>
+                      <Text style={styles.reportStatBoxVal}>{quizReport.totalQuestions}</Text>
+                    </View>
+                    <View style={styles.reportStatBox}>
+                      <Text style={styles.reportStatBoxLabel}>CORRECT</Text>
+                      <Text style={[styles.reportStatBoxVal, { color: '#39FF14' }]}>{quizReport.correctAnswers}</Text>
+                    </View>
+                    <View style={styles.reportStatBox}>
+                      <Text style={styles.reportStatBoxLabel}>INCORRECT</Text>
+                      <Text style={[styles.reportStatBoxVal, { color: '#FF3B30' }]}>{quizReport.incorrectAnswers}</Text>
+                    </View>
+                    <View style={styles.reportStatBox}>
+                      <Text style={styles.reportStatBoxLabel}>XP EARNED</Text>
+                      <Text style={[styles.reportStatBoxVal, { color: '#FFD700' }]}>+{quizReport.xpAwarded} XP</Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Action Buttons for PASS / FAIL */}
+                <View style={styles.reportActionsContainer}>
+                  {quizReport.isPass ? (
+                    <>
+                      {quizReport.level < 40 ? (
+                        <TouchableOpacity
+                          style={styles.reportPrimaryBtn}
+                          onPress={() => startLevel(quizReport.level + 1)}
+                          activeOpacity={0.85}
+                        >
+                          <LinearGradient colors={['#39FF14', '#00E5FF']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.reportPrimaryGradient}>
+                            <Ionicons name="arrow-forward-circle" size={18} color="#050705" style={{ marginRight: 8 }} />
+                            <Text style={styles.reportPrimaryBtnText}>CONTINUE TO LEVEL {quizReport.level + 1} →</Text>
+                          </LinearGradient>
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={styles.allClearedCard}>
+                          <Text style={styles.allClearedText}>🏆 ALL 40 CYBER STRIKE SECTORS CONQUERED! 🏆</Text>
+                        </View>
+                      )}
+
+                      <View style={styles.reportSecondaryRow}>
+                        <TouchableOpacity
+                          style={styles.reportSecondaryBtn}
+                          onPress={() => startLevel(quizReport.level)}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons name="refresh" size={15} color="#39FF14" style={{ marginRight: 6 }} />
+                          <Text style={styles.reportSecondaryBtnText}>REPLAY LEVEL</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                          style={styles.reportDashboardBtn}
+                          onPress={handleReturnToDashboard}
+                          activeOpacity={0.8}
+                          accessibilityLabel="Back to dashboard"
+                        >
+                          <Ionicons name="home" size={15} color="#00E5FF" style={{ marginRight: 6 }} />
+                          <Text style={styles.reportDashboardBtnText}>RETURN TO DASHBOARD</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </>
+                  ) : (
+                    <>
+                      <TouchableOpacity
+                        style={styles.reportRetryBtn}
+                        onPress={() => startLevel(quizReport.level)}
+                        activeOpacity={0.85}
+                      >
+                        <LinearGradient colors={['#FF3B30', '#FF6A00']} start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }} style={styles.reportPrimaryGradient}>
+                          <Ionicons name="reload-circle" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                          <Text style={[styles.reportPrimaryBtnText, { color: '#FFFFFF' }]}>RETRY LEVEL {quizReport.level} ↺</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.reportDashboardBtnFull}
+                        onPress={handleReturnToDashboard}
+                        activeOpacity={0.8}
+                        accessibilityLabel="Back to dashboard"
+                      >
+                        <Ionicons name="home" size={15} color="#00E5FF" style={{ marginRight: 6 }} />
+                        <Text style={styles.reportDashboardBtnText}>RETURN TO DASHBOARD</Text>
+                      </TouchableOpacity>
+                    </>
+                  )}
+                </View>
+
+                {/* Question-Wise Answer Review Section */}
+                <View style={styles.reviewSection}>
+                  <View style={styles.reviewSectionHeader}>
+                    <Ionicons name="list-outline" size={18} color="#39FF14" style={{ marginRight: 8 }} />
+                    <Text style={styles.reviewSectionTitle}>TACTICAL DEBRIEF — ANSWER REVIEW</Text>
+                  </View>
+
+                  {quizReport.answersReview && quizReport.answersReview.map((item, idx) => (
+                    <View
+                      key={idx}
+                      style={[
+                        styles.reviewCard,
+                        item.isCorrect ? styles.reviewCardCorrect : styles.reviewCardWrong,
+                      ]}
+                    >
+                      <View style={styles.reviewCardTopRow}>
+                        <Text style={styles.reviewQuestionNum}>QUESTION {item.index}</Text>
+                        <View style={[styles.reviewIndicatorPill, item.isCorrect ? styles.pillCorrect : styles.pillWrong]}>
+                          <Ionicons
+                            name={item.isCorrect ? 'checkmark-circle' : 'close-circle'}
+                            size={14}
+                            color={item.isCorrect ? '#39FF14' : '#FF3B30'}
+                            style={{ marginRight: 4 }}
+                          />
+                          <Text style={[styles.reviewIndicatorText, { color: item.isCorrect ? '#39FF14' : '#FF3B30' }]}>
+                            {item.isCorrect ? 'CORRECT' : 'INCORRECT'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <Text style={styles.reviewPromptText}>{item.prompt}</Text>
+
+                      {/* User Given Answer */}
+                      <View style={styles.reviewAnswerRow}>
+                        <Text style={styles.reviewAnswerLabel}>Your Answer:</Text>
+                        <Text
+                          style={[
+                            styles.reviewAnswerVal,
+                            item.isCorrect ? styles.reviewAnswerValGreen : styles.reviewAnswerValRed,
+                          ]}
+                        >
+                          {item.givenAnswer || '(No Answer Selected)'}
+                        </Text>
+                      </View>
+
+                      {/* Correct Answer */}
+                      <View style={styles.reviewAnswerRow}>
+                        <Text style={styles.reviewAnswerLabel}>Correct Answer:</Text>
+                        <Text style={[styles.reviewAnswerVal, styles.reviewAnswerValGreen]}>
+                          {item.correctAnswer}
+                        </Text>
+                      </View>
+
+                      {/* Step-by-step Explanation */}
+                      {item.explanation && (
+                        <View style={styles.reviewExplanationBox}>
+                          <Text style={styles.reviewExplanationLabel}>EXPLANATION:</Text>
+                          <Text style={styles.reviewExplanationText}>{item.explanation}</Text>
+                        </View>
+                      )}
+                    </View>
+                  ))}
                 </View>
               </ScrollView>
             )}
@@ -1914,20 +2045,35 @@ const styles = StyleSheet.create({
   },
   stepProgressBar: {
     flexDirection: 'row',
-    gap: 4,
-    marginBottom: 10,
+    gap: 6,
+    marginBottom: 12,
   },
   progressStep: {
     flex: 1,
-    height: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: 2,
+    height: 22,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   progressStepActive: {
-    backgroundColor: '#00E5FF',
+    borderColor: '#00E5FF',
+    backgroundColor: 'rgba(0, 229, 255, 0.15)',
   },
   progressStepDone: {
-    backgroundColor: '#39FF14',
+    borderColor: '#39FF14',
+    backgroundColor: 'rgba(57, 255, 20, 0.15)',
+  },
+  progressStepNum: {
+    color: '#777777',
+    fontSize: 9.5,
+    fontWeight: '800',
+  },
+  progressStepNumActive: {
+    color: '#00E5FF',
+    fontWeight: '900',
   },
   questionContent: {
     paddingBottom: 16,
@@ -2557,6 +2703,460 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '900',
     letterSpacing: 0.8,
+  },
+
+  // -------------------------------------------------------------------------
+  // QUIZ NAVIGATION FOOTER
+  // -------------------------------------------------------------------------
+  quizNavFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  quizPrevBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.4)',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    minWidth: 80,
+    justifyContent: 'center',
+  },
+  quizPrevBtnText: {
+    color: '#39FF14',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  quizCounterWrap: {
+    alignItems: 'center',
+  },
+  quizCounterText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  quizNextBtn: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#39FF14',
+    minWidth: 130,
+  },
+  quizNextBtnGradient: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quizNextBtnText: {
+    color: '#39FF14',
+    fontSize: 11.5,
+    fontWeight: '900',
+    letterSpacing: 0.6,
+  },
+  quizSubmitBtn: {
+    borderRadius: 8,
+    overflow: 'hidden',
+    minWidth: 140,
+  },
+  quizSubmitBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  quizSubmitBtnText: {
+    color: '#050705',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+
+  // -------------------------------------------------------------------------
+  // QUIZ RESULT REPORT
+  // -------------------------------------------------------------------------
+  reportScrollContent: {
+    paddingBottom: 24,
+  },
+  reportHeroCard: {
+    borderWidth: 1.5,
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  reportHeroPass: {
+    borderColor: '#39FF14',
+    backgroundColor: 'rgba(57, 255, 20, 0.05)',
+  },
+  reportHeroFail: {
+    borderColor: '#FF3B30',
+    backgroundColor: 'rgba(255, 59, 48, 0.05)',
+  },
+  reportStatusHeaderRow: {
+    width: '100%',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  reportStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  badgePass: {
+    borderColor: '#39FF14',
+    backgroundColor: 'rgba(57, 255, 20, 0.15)',
+  },
+  badgeFail: {
+    borderColor: '#FF3B30',
+    backgroundColor: 'rgba(255, 59, 48, 0.15)',
+  },
+  reportStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  reportTimestampText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+  },
+  reportHeroIconWrap: {
+    marginVertical: 6,
+  },
+  reportHeroTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+    textAlign: 'center',
+    marginTop: 4,
+  },
+  reportHeroSub: {
+    color: colors.textSecondary,
+    fontSize: 11,
+    textAlign: 'center',
+    marginTop: 3,
+    marginBottom: 14,
+    paddingHorizontal: 12,
+  },
+
+  // Progress Bar with 50% Threshold Mark
+  scoreProgressSection: {
+    width: '100%',
+    marginTop: 4,
+  },
+  scoreProgressLabelRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  scoreProgressLabel: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  scoreProgressValue: {
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  scoreTrack: {
+    width: '100%',
+    height: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 5,
+    overflow: 'visible',
+    position: 'relative',
+    marginBottom: 14,
+  },
+  scoreFill: {
+    height: '100%',
+    borderRadius: 5,
+  },
+  passThresholdMarker: {
+    position: 'absolute',
+    left: '50%',
+    top: -2,
+    bottom: -16,
+    alignItems: 'center',
+    zIndex: 10,
+  },
+  passThresholdLine: {
+    width: 2,
+    height: 14,
+    backgroundColor: '#FFD700',
+  },
+  passThresholdText: {
+    color: '#FFD700',
+    fontSize: 8,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+
+  // Metadata Card
+  reportMetaCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  reportMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingBottom: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.06)',
+    marginBottom: 10,
+  },
+  reportMetaItem: {
+    flex: 1,
+  },
+  reportMetaDivider: {
+    width: 1,
+    height: 24,
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    marginHorizontal: 12,
+  },
+  reportMetaLabel: {
+    color: colors.textSecondary,
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  reportMetaVal: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  reportStatsGrid: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  reportStatBox: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    borderRadius: 8,
+    padding: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  reportStatBoxLabel: {
+    color: colors.textSecondary,
+    fontSize: 8.5,
+    fontWeight: '800',
+  },
+  reportStatBoxVal: {
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+
+  // Actions Container
+  reportActionsContainer: {
+    marginBottom: 16,
+    gap: 8,
+  },
+  reportPrimaryBtn: {
+    borderRadius: 10,
+    overflow: 'hidden',
+  },
+  reportPrimaryGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 13,
+  },
+  reportPrimaryBtnText: {
+    color: '#050705',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  reportSecondaryRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  reportSecondaryBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(57, 255, 20, 0.08)',
+    borderWidth: 1,
+    borderColor: '#39FF14',
+    borderRadius: 10,
+    paddingVertical: 11,
+  },
+  reportSecondaryBtnText: {
+    color: '#39FF14',
+    fontSize: 11.5,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  reportDashboardBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 229, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: '#00E5FF',
+    borderRadius: 10,
+    paddingVertical: 11,
+  },
+  reportDashboardBtnText: {
+    color: '#00E5FF',
+    fontSize: 11.5,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  reportRetryBtn: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 6,
+  },
+  reportDashboardBtnFull: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0, 229, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: '#00E5FF',
+    borderRadius: 10,
+    paddingVertical: 12,
+  },
+
+  // Question Review Section
+  reviewSection: {
+    marginTop: 8,
+  },
+  reviewSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    paddingBottom: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  reviewSectionTitle: {
+    color: '#39FF14',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.8,
+  },
+  reviewCard: {
+    backgroundColor: 'rgba(255, 255, 255, 0.02)',
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 10,
+  },
+  reviewCardCorrect: {
+    borderColor: 'rgba(57, 255, 20, 0.4)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#39FF14',
+  },
+  reviewCardWrong: {
+    borderColor: 'rgba(255, 59, 48, 0.4)',
+    borderLeftWidth: 3,
+    borderLeftColor: '#FF3B30',
+  },
+  reviewCardTopRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  reviewQuestionNum: {
+    color: colors.textSecondary,
+    fontSize: 9.5,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  reviewIndicatorPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  pillCorrect: {
+    backgroundColor: 'rgba(57, 255, 20, 0.15)',
+  },
+  pillWrong: {
+    backgroundColor: 'rgba(255, 59, 48, 0.15)',
+  },
+  reviewIndicatorText: {
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  reviewPromptText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
+    marginBottom: 8,
+    lineHeight: 16,
+  },
+  reviewAnswerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  reviewAnswerLabel: {
+    color: colors.textSecondary,
+    fontSize: 10.5,
+    width: 100,
+  },
+  reviewAnswerVal: {
+    fontSize: 11,
+    fontWeight: '800',
+    flex: 1,
+  },
+  reviewAnswerValGreen: {
+    color: '#39FF14',
+  },
+  reviewAnswerValRed: {
+    color: '#FF3B30',
+  },
+  reviewExplanationBox: {
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    borderRadius: 6,
+    padding: 8,
+    marginTop: 6,
+    borderLeftWidth: 2,
+    borderLeftColor: '#00E5FF',
+  },
+  reviewExplanationLabel: {
+    color: '#00E5FF',
+    fontSize: 8.5,
+    fontWeight: '900',
+    marginBottom: 2,
+  },
+  reviewExplanationText: {
+    color: colors.textSecondary,
+    fontSize: 10,
+    lineHeight: 14,
   },
 });
 

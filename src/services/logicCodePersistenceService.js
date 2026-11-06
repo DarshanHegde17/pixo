@@ -12,12 +12,14 @@
 import { SessionStorage } from './sessionStorage.js';
 import { AuthService } from './authService.js';
 import { GamingActivityService } from './gamingActivityService.js';
+import { isValidOperatorSolution } from './logicCodeQuestionService.js';
 
 export const LOGIC_CODE_STORAGE_KEYS = {
   UNLOCKED_LEVEL: '@pixo_logic_code_unlocked_level_',
   COMPLETED_LEVELS: '@pixo_logic_code_completed_levels_',
   ACTIVE_SESSION: '@pixo_logic_code_active_session_',
   PLAYER_STATS: '@pixo_logic_code_player_stats_',
+  QUIZ_RESULTS: '@pixo_logic_code_quiz_results_',
 };
 
 export const LOGIC_CODE_BADGES = {
@@ -374,5 +376,182 @@ export const LogicCodePersistenceService = {
       user: updatedUser,
       stats,
     };
+  },
+
+  /**
+   * Saves a quiz result report for a specific level.
+   * Maintains history of level results while allowing re-attempts.
+   */
+  async saveQuizResult(userId = 'guest', level = 1, resultData) {
+    const key = `${LOGIC_CODE_STORAGE_KEYS.QUIZ_RESULTS}${this.getCleanId(userId)}`;
+    const allResults = (await SessionStorage.getItem(key)) || {};
+    allResults[Number(level)] = {
+      ...resultData,
+      level: Number(level),
+      updatedAt: new Date().toISOString(),
+    };
+    await SessionStorage.setItem(key, allResults);
+    return allResults[Number(level)];
+  },
+
+  /**
+   * Retrieves the saved quiz result report for a specific level.
+   */
+  async getLevelQuizResult(userId = 'guest', level = 1) {
+    const key = `${LOGIC_CODE_STORAGE_KEYS.QUIZ_RESULTS}${this.getCleanId(userId)}`;
+    const allResults = (await SessionStorage.getItem(key)) || {};
+    return allResults[Number(level)] || null;
+  },
+
+  /**
+   * Retrieves all saved quiz results for the user.
+   */
+  async getAllQuizResults(userId = 'guest') {
+    const key = `${LOGIC_CODE_STORAGE_KEYS.QUIZ_RESULTS}${this.getCleanId(userId)}`;
+    return (await SessionStorage.getItem(key)) || {};
+  },
+
+  /**
+   * Evaluates a full quiz submission for Cyber Strike: 2099.
+   * 
+   * Strict MASTER PROMPT Evaluation Rules:
+   * 1. Evaluates all questions in the level.
+   * 2. Empty or unanswered questions strictly count as incorrect.
+   * 3. Score Percentage = (Correct Answers / Total Questions) × 100.
+   * 4. Pass/Fail Rule:
+   *    - Score Percentage > 50%: PASS (Level completed, next level unlocked).
+   *    - Score Percentage <= 50%: FAIL (Next level remains LOCKED, level progression unchanged).
+   * 5. Saves independent quiz report with question-wise answer debrief.
+   */
+  async processQuizSubmission(userId = 'guest', level = 1, {
+    questions = [],
+    selectedAnswers = {},
+    placedOperatorsByQ = {},
+    durationSeconds = 60,
+  }) {
+    if (!userId) throw new Error('User authentication required.');
+    const numLevel = Number(level);
+    const totalQuestions = questions.length;
+    if (totalQuestions === 0) {
+      throw new Error('Cannot evaluate empty quiz.');
+    }
+
+    const answersReview = [];
+    let correctCount = 0;
+
+    for (let i = 0; i < totalQuestions; i++) {
+      const q = questions[i];
+      let isCorrect = false;
+      let givenAnswer = null;
+      let correctAnswerStr = '';
+
+      if (q.type === 'missing_operator' || q.isOperatorPuzzle) {
+        const ops = placedOperatorsByQ[i] || [];
+        const expectedCount = q.opCount || (q.numbers ? q.numbers.length - 1 : 0);
+        const hasMissing = ops.length < expectedCount || ops.slice(0, expectedCount).some((o) => !o);
+
+        correctAnswerStr = q.correctAnswer || (Array.isArray(q.validSolutions) && q.validSolutions[0] ? q.validSolutions[0].join('  ') : 'Valid Operator Combination');
+
+        if (hasMissing) {
+          isCorrect = false;
+          givenAnswer = ops.filter(Boolean).length > 0 ? ops.map((o) => o || '?').join('  ') : '(No Answer)';
+        } else {
+          const opMap = { '+': '+', '−': '-', '×': '*', '÷': '/' };
+          const mathOps = ops.slice(0, expectedCount).map((op) => opMap[op] || op);
+          isCorrect = isValidOperatorSolution(q.numbers, mathOps, q.targetNumber || q.target);
+          givenAnswer = ops.slice(0, expectedCount).join('  ');
+        }
+      } else {
+        const choice = selectedAnswers[i];
+        correctAnswerStr = String(q.correctAnswer ?? '');
+
+        if (choice === null || choice === undefined || String(choice).trim() === '') {
+          isCorrect = false;
+          givenAnswer = '(No Answer)';
+        } else {
+          isCorrect = String(choice).trim() === String(q.correctAnswer).trim();
+          givenAnswer = String(choice);
+        }
+      }
+
+      if (isCorrect) correctCount++;
+
+      answersReview.push({
+        questionIdx: i,
+        index: i + 1,
+        prompt: q.questionText || q.prompt || q.title || `Question ${i + 1}`,
+        givenAnswer,
+        correctAnswer: correctAnswerStr,
+        isCorrect,
+        explanation: q.explanation || 'Review the mathematical rules for this problem.',
+        hint: q.hint || '',
+      });
+    }
+
+    const incorrectCount = totalQuestions - correctCount;
+    // Score Percentage = (Correct Answers / Total Questions) × 100
+    const scorePercentage = Math.round((correctCount / totalQuestions) * 100);
+
+    // Exact Rule: MORE THAN 50% = PASS, 50% or below = FAIL
+    const isPass = scorePercentage > 50;
+    const isFail = !isPass;
+    const status = isPass ? 'PASS' : 'FAIL';
+
+    // Base score calculation
+    const baseScore = correctCount * 1000;
+    const timeBonus = Math.max(0, 150 - Number(durationSeconds || 60)) * 10;
+    const score = isPass ? baseScore + timeBonus : baseScore;
+
+    let unlockedLevel = await this.getUnlockedLevel(userId);
+    let xpAwarded = 0;
+    let coinsAwarded = 0;
+    let completionDetails = null;
+
+    if (isPass) {
+      // PASS: Level cleared! Unlock next level and record level completion
+      completionDetails = await this.completeLevel(userId, numLevel, {
+        correctCount,
+        totalQuestions,
+        score,
+        durationSeconds: durationSeconds || 60,
+        earnedQuestionXp: correctCount * 15,
+      });
+      unlockedLevel = completionDetails.unlockedLevel;
+      xpAwarded = completionDetails.xpAwarded;
+      coinsAwarded = completionDetails.coinsAwarded;
+    } else {
+      // FAIL: Next level remains LOCKED! Do NOT increase progression.
+      await this.clearActiveSession(userId);
+      // Record question attempts for stats
+      for (const item of answersReview) {
+        await this.recordQuestionAttempt(userId, {
+          isCorrect: item.isCorrect,
+          timeSeconds: Math.max(1, Math.round((durationSeconds || 60) / totalQuestions)),
+          xpEarned: 0,
+        });
+      }
+    }
+
+    const quizReport = {
+      level: numLevel,
+      scorePercentage,
+      correctAnswers: correctCount,
+      incorrectAnswers: incorrectCount,
+      totalQuestions,
+      status,
+      isPass,
+      isFail,
+      score,
+      xpAwarded,
+      coinsAwarded,
+      unlockedLevel,
+      submittedAt: new Date().toISOString(),
+      answersReview,
+    };
+
+    // Save independent quiz result for this level
+    await this.saveQuizResult(userId, numLevel, quizReport);
+
+    return quizReport;
   },
 };
