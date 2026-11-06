@@ -19,6 +19,8 @@ import { ProfileScreen } from './ProfileScreen';
 import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunnerModal';
 import { TargetNumberGameModal } from '../components/gameplay/TargetNumberGameModal';
 import { LogicCodeGameModal } from '../components/gameplay/LogicCodeGameModal';
+import { BrainBlitzGameModal } from '../components/gameplay/BrainBlitzGameModal';
+import { BrainBlitzPersistenceService } from '../services/brainBlitzPersistenceService';
 import { RestoreStreakModal } from '../components/profile/RestoreStreakModal';
 import { CoinStoreScreen } from './CoinStoreScreen';
 import {
@@ -46,6 +48,24 @@ const CATEGORIES = [
 
 // All Games in PIXO Catalog with Curated High-Resolution Internet Artwork
 export const ALL_GAMES = [
+  {
+    id: 'g_brain_blitz',
+    title: 'PIXO Brain Blitz',
+    category: 'Memory & Recall Arena',
+    catId: 'puzzle',
+    rating: '5.0',
+    reviews: '21.7k',
+    badge: '3 MODES • 30 LVLS',
+    badgeColor: '#39FF14',
+    accentColor: '#39FF14',
+    imageUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=600&q=80',
+    fallbackArt: DASHBOARD_ART.cyberPuzzle,
+    desc: 'Train Your Brain. Beat Your Best. Master Memory Match pairs, Sequence Recall lighting, and Pattern Recall matrix geometry across 30 progressive cognitive levels.',
+    tags: ['Brain Blitz', 'Memory Match', 'Sequence Recall', 'Pattern Recall', '30 Levels'],
+    rewardXp: 100,
+    rewardCoins: 20,
+    isBrainBlitz: true,
+  },
   {
     id: 'g_cyber_strike',
     title: 'Cyber Strike: 2099',
@@ -279,10 +299,50 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [liveSessionGame, setLiveSessionGame] = useState(null);
   const [isTargetGameOpen, setIsTargetGameOpen] = useState(false);
   const [isLogicCodeOpen, setIsLogicCodeOpen] = useState(false);
+  const [isBrainBlitzOpen, setIsBrainBlitzOpen] = useState(false);
   const [hasActiveTargetSession, setHasActiveTargetSession] = useState(false);
   const [targetLevelToPlay, setTargetLevelToPlay] = useState(1);
   const [unlockedLevel, setUnlockedLevel] = useState(1);
   const [isExitConfirmVisible, setIsExitConfirmVisible] = useState(false);
+  const [savedSessionInfo, setSavedSessionInfo] = useState(null);
+
+  // Poll / load unfinished game session for the Continue Playing card
+  useEffect(() => {
+    let isMounted = true;
+    async function checkSavedSessions() {
+      try {
+        if (!user?.id) return;
+        const bb = await BrainBlitzPersistenceService.getActiveSession(user.id);
+        if (bb && bb.level && isMounted) {
+          setSavedSessionInfo({
+            type: 'brain_blitz',
+            title: `PIXO Brain Blitz`,
+            subtitle: `${bb.modeTitle || 'Memory Match'} • Level ${bb.level} (${bb.timeLeft || 30}s left)`,
+            game: { id: 'g_brain_blitz', isBrainBlitz: true, title: 'PIXO Brain Blitz' },
+          });
+          return;
+        }
+        const tn = await GamePersistenceService.getActiveSession(user.id);
+        if (tn && tn.level && isMounted) {
+          setSavedSessionInfo({
+            type: 'target_number',
+            title: `Target Number (Speed Math)`,
+            subtitle: `Level ${tn.level} • ${tn.timeLeft || 30}s remaining`,
+            game: { id: 'g_target_no', isTargetNumber: true, title: 'Target Number' },
+          });
+          return;
+        }
+        if (isMounted) setSavedSessionInfo(null);
+      } catch (e) {
+        console.warn('Error checking saved sessions:', e);
+      }
+    }
+
+    checkSavedSessions();
+    return () => {
+      isMounted = false;
+    };
+  }, [user?.id, activeTab, isBrainBlitzOpen, isTargetGameOpen, isLogicCodeOpen]);
 
   // Centralized Navigation Service Subscriptions
   useEffect(() => {
@@ -292,6 +352,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           setActiveTab(route.id);
           setIsTargetGameOpen(false);
           setIsLogicCodeOpen(false);
+          setIsBrainBlitzOpen(false);
           setSelectedGameModal(null);
         } else if (['target_number', 'target_level_select', 'target_gameplay'].includes(route.id)) {
           setActiveTab('games');
@@ -299,6 +360,9 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
         } else if (['cyber_strike', 'cyber_strike_levels', 'cyber_strike_gameplay'].includes(route.id)) {
           setActiveTab('games');
           setIsLogicCodeOpen(true);
+        } else if (['brain_blitz', 'brain_blitz_levels', 'brain_blitz_gameplay'].includes(route.id)) {
+          setActiveTab('games');
+          setIsBrainBlitzOpen(true);
         } else if (route.id === 'game_details') {
           setActiveTab('games');
           setSelectedGameModal(route.params?.game || ALL_GAMES[0]);
@@ -439,6 +503,15 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   // Launch Game Handler
   const handleStartGame = (game) => {
     setSelectedGameModal(null);
+    if (
+      game?.id === 'g_brain_blitz' ||
+      game?.id === 'brain_blitz' ||
+      game?.isBrainBlitz ||
+      game?.title?.toLowerCase().includes('brain blitz')
+    ) {
+      NavigationService.navigate('brain_blitz');
+      return;
+    }
     if (
       game?.id === 'g_cyber_strike' ||
       game?.id === 'cyber_strike' ||
@@ -1412,27 +1485,45 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
                   <View style={styles.continuePlayingCard}>
                     {/* Thumbnail */}
                     <Image
-                      source={{ uri: 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=600&q=80' }}
+                      source={{
+                        uri: savedSessionInfo?.type === 'brain_blitz'
+                          ? 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&q=80'
+                          : savedSessionInfo?.type === 'target_number'
+                          ? 'https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&w=600&q=80'
+                          : 'https://images.unsplash.com/photo-1503376780353-7e6692767b70?auto=format&fit=crop&w=600&q=80',
+                      }}
                       style={styles.continueThumbnail}
                       resizeMode="cover"
                     />
 
                     {/* Middle Info */}
                     <View style={styles.continueInfoCol}>
-                      <Text style={styles.continueGameTitle}>Neon Racing: Grid Run</Text>
-                      <Text style={styles.continueLastPlayed}>Last played: 2h ago</Text>
+                      <Text style={styles.continueGameTitle}>
+                        {savedSessionInfo ? savedSessionInfo.title : 'Neon Racing: Grid Run'}
+                      </Text>
+                      <Text style={styles.continueLastPlayed}>
+                        {savedSessionInfo ? savedSessionInfo.subtitle : 'Last played: 2h ago'}
+                      </Text>
                       <View style={styles.continueProgressRow}>
                         <View style={styles.continueProgressBar}>
-                          <View style={[styles.continueProgressFill, { width: '67%' }]} />
+                          <View style={[styles.continueProgressFill, { width: savedSessionInfo ? '85%' : '67%' }]} />
                         </View>
-                        <Text style={styles.continuePercentText}>67%</Text>
+                        <Text style={styles.continuePercentText}>
+                          {savedSessionInfo ? 'IN PROGRESS' : '67%'}
+                        </Text>
                       </View>
                     </View>
 
                     {/* Resume Button */}
                     <TouchableOpacity
                       style={styles.continueResumeBtn}
-                      onPress={() => handleStartGame({ title: 'Neon Racing: Grid Run', id: 'g_neon_racing' })}
+                      onPress={() => {
+                        if (savedSessionInfo) {
+                          handleStartGame(savedSessionInfo.game);
+                        } else {
+                          handleStartGame({ title: 'Neon Racing: Grid Run', id: 'g_neon_racing' });
+                        }
+                      }}
                       activeOpacity={0.85}
                     >
                       <Ionicons name="play" size={13} color="#050705" style={{ marginRight: 4 }} />
@@ -1604,6 +1695,13 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
         onSessionComplete={handleTransactionsChanged}
       />
 
+      {/* PIXO Brain Blitz - Memory & Recall Game Modal (30 Levels across 3 Modes) */}
+      <BrainBlitzGameModal
+        visible={isBrainBlitzOpen}
+        onClose={() => setIsBrainBlitzOpen(false)}
+        onSessionComplete={handleTransactionsChanged}
+      />
+
       {/* PIXO Restore Streak Confirmation Modal */}
       <RestoreStreakModal
         visible={isRestoreModalOpen}
@@ -1663,10 +1761,10 @@ const styles = StyleSheet.create({
     paddingBottom: 95,
   },
   dashboardContainer: {
-    maxWidth: 520,
+    maxWidth: 960,
     width: '100%',
     alignSelf: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingTop: 8,
   },
 
@@ -1815,10 +1913,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     paddingTop: Platform.OS === 'android' ? 24 : 10,
     paddingBottom: 10,
-    maxWidth: 520,
+    maxWidth: 960,
     width: '100%',
     alignSelf: 'center',
   },

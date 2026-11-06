@@ -52,6 +52,7 @@ export const LogicCodeGameModal = ({
   const [questions, setQuestions] = useState([]);
   const [currentQuestionIdx, setCurrentQuestionIdx] = useState(0);
   const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
+  const [pauseModalMode, setPauseModalMode] = useState('pause'); // 'pause' | 'exit_confirm'
   const frozenTimeLeftRef = useRef(45);
   const [userSelection, setUserSelection] = useState(null); // For multiple choice / classification
   const [placedOperators, setPlacedOperators] = useState([]); // For missing operator [box0, box1, ...]
@@ -412,6 +413,26 @@ export const LogicCodeGameModal = ({
   }, [screen, user?.id, questions, currentQuestionIdx, selectedLevel, selectedCategory, score, earnedXp, correctCount, answersHistory, onClose]);
 
   // Handle Pause Mission (Back button during active gameplay)
+  // Handle Back Button Requested (Exit Confirmation Dialog)
+  const handleBackRequested = useCallback(() => {
+    if (screen === 'playing') {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      frozenTimeLeftRef.current = timeLeft || 45;
+      setPauseModalMode('exit_confirm');
+      setIsPauseModalOpen(true);
+    } else if (screen === 'category_levels') {
+      setScreen('dashboard');
+      NavigationService.navigate('cyber_strike');
+    } else {
+      if (onClose) onClose();
+      NavigationService.navigateToDashboard();
+    }
+  }, [screen, timeLeft, onClose]);
+
+  // Handle Pause Menu Trigger (Pause Button)
   const handlePauseMission = useCallback(() => {
     if (screen !== 'playing') return;
 
@@ -421,6 +442,7 @@ export const LogicCodeGameModal = ({
     }
 
     frozenTimeLeftRef.current = timeLeft || 45;
+    setPauseModalMode('pause');
     setIsPauseModalOpen(true);
   }, [screen, timeLeft]);
 
@@ -429,7 +451,7 @@ export const LogicCodeGameModal = ({
     setIsPauseModalOpen(false);
   }, []);
 
-  // Handle Exit Mission (Save unfinished session and return to levels screen)
+  // Handle Save & Exit Mission (Save unfinished session and return DIRECTLY to PIXO Dashboard)
   const handleExitMission = useCallback(async () => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -446,13 +468,28 @@ export const LogicCodeGameModal = ({
         earnedXp,
         correctCount,
         answersHistory,
-        status: 'in_progress',
+        timeLeft: frozenTimeLeftRef.current || timeLeft,
+        status: 'SAVED',
       });
     }
 
     setIsPauseModalOpen(false);
-    NavigationService.goBack();
-  }, [user?.id, selectedLevel, selectedCategory, questions, currentQuestionIdx, score, earnedXp, correctCount, answersHistory]);
+    setScreen('dashboard');
+    if (onClose) onClose();
+    NavigationService.navigateToDashboard();
+  }, [user?.id, selectedLevel, selectedCategory, questions, currentQuestionIdx, score, earnedXp, correctCount, answersHistory, timeLeft, onClose]);
+
+  // Handle Direct Return to Dashboard (from Victory screen)
+  const handleReturnToDashboard = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setIsPauseModalOpen(false);
+    setScreen('dashboard');
+    if (onClose) onClose();
+    NavigationService.navigateToDashboard();
+  }, [onClose]);
 
   // Centralized Navigation Back Handler registration for Logic Code
   useEffect(() => {
@@ -462,11 +499,16 @@ export const LogicCodeGameModal = ({
       'logic_code_game_modal',
       () => {
         if (isPauseModalOpen) {
-          // Absorb back while pause menu is active
+          handleResumeMission();
           return true;
         }
         if (screen === 'playing') {
-          handlePauseMission();
+          handleBackRequested();
+          return true;
+        }
+        if (screen === 'category_levels') {
+          setScreen('dashboard');
+          NavigationService.navigate('cyber_strike');
           return true;
         }
         return false;
@@ -475,7 +517,7 @@ export const LogicCodeGameModal = ({
     );
 
     return unregister;
-  }, [visible, screen, isPauseModalOpen, handlePauseMission]);
+  }, [visible, screen, isPauseModalOpen, handleResumeMission, handleBackRequested]);
 
   if (!visible) return null;
 
@@ -496,13 +538,7 @@ export const LogicCodeGameModal = ({
             <View style={styles.topHeaderBar}>
               <View style={styles.headerLeftGroup}>
                 <PixoBackButton
-                  onPress={() => {
-                    if (screen === 'playing') {
-                      handlePauseMission();
-                    } else {
-                      NavigationService.goBack();
-                    }
-                  }}
+                  onPress={handleBackRequested}
                   variant="circle"
                   size={18}
                   style={styles.modalBackArrow}
@@ -527,9 +563,9 @@ export const LogicCodeGameModal = ({
                     style={styles.headerPillBtn}
                     onPress={() => {
                       if (screen === 'playing') {
-                        handlePauseMission();
+                        handleBackRequested();
                       } else {
-                        NavigationService.goBack();
+                        setScreen('dashboard');
                       }
                     }}
                   >
@@ -548,13 +584,7 @@ export const LogicCodeGameModal = ({
 
                 <TouchableOpacity
                   style={styles.closeBtn}
-                  onPress={() => {
-                    if (screen === 'playing') {
-                      handlePauseMission();
-                    } else {
-                      NavigationService.goBack();
-                    }
-                  }}
+                  onPress={handleBackRequested}
                   accessibilityLabel="Close game"
                 >
                   <Ionicons name="close" size={20} color={colors.textSecondary} />
@@ -864,6 +894,16 @@ export const LogicCodeGameModal = ({
                     <Text style={styles.hudBadgeLabel}>SCORE</Text>
                     <Text style={styles.hudBadgeVal}>{score}</Text>
                   </View>
+
+                  <TouchableOpacity
+                    style={styles.hudPauseBtn}
+                    onPress={handlePauseMission}
+                    activeOpacity={0.8}
+                    accessibilityLabel="Pause mission"
+                  >
+                    <Ionicons name="pause" size={13} color="#FFA000" style={{ marginRight: 3 }} />
+                    <Text style={styles.hudPauseText}>PAUSE</Text>
+                  </TouchableOpacity>
                 </View>
 
                 {/* 5-Step Segmented Progress Bar */}
@@ -1168,6 +1208,18 @@ export const LogicCodeGameModal = ({
                     </View>
                   )}
 
+                  <TouchableOpacity
+                    style={styles.returnDashboardBtn}
+                    onPress={handleReturnToDashboard}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Return directly to PIXO dashboard"
+                  >
+                    <LinearGradient colors={['#0F2414', '#09150C']} style={styles.dashboardBtnGradient}>
+                      <Ionicons name="home" size={15} color="#39FF14" style={{ marginRight: 6 }} />
+                      <Text style={styles.returnDashboardBtnText}>RETURN TO DASHBOARD</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+
                   <TouchableOpacity style={styles.replayBtn} onPress={() => startLevel(selectedLevel)}>
                     <Text style={styles.replayBtnText}>REPLAY LEVEL {selectedLevel}</Text>
                   </TouchableOpacity>
@@ -1249,9 +1301,10 @@ export const LogicCodeGameModal = ({
               </ScrollView>
             )}
 
-            {/* Pixo Mission Pause Menu Modal */}
+            {/* Pixo Mission Pause Menu / Exit Confirmation Modal */}
             <PixoPauseModal
               visible={isPauseModalOpen}
+              mode={pauseModalMode}
               gameTitle={`CYBER STRIKE: LEVEL ${selectedLevel} (${selectedCategory?.title || 'Tactical'})`}
               level={selectedLevel}
               timeLeft={frozenTimeLeftRef.current || timeLeft}
@@ -1259,7 +1312,7 @@ export const LogicCodeGameModal = ({
               currentQuestion={currentQuestionIdx + 1}
               totalQuestions={questions.length || 5}
               onResume={handleResumeMission}
-              onExit={handleExitMission}
+              onSaveAndExit={handleExitMission}
             />
           </LinearGradient>
         </View>
@@ -2468,6 +2521,42 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     fontSize: 9.5,
     marginTop: 1,
+  },
+  hudPauseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 160, 0, 0.15)',
+    borderWidth: 1,
+    borderColor: '#FFA000',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginLeft: 4,
+  },
+  hudPauseText: {
+    color: '#FFA000',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  returnDashboardBtn: {
+    borderRadius: 10,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: '#39FF14',
+    marginBottom: 8,
+  },
+  dashboardBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+  },
+  returnDashboardBtnText: {
+    color: '#39FF14',
+    fontSize: 12,
+    fontWeight: '900',
+    letterSpacing: 0.8,
   },
 });
 

@@ -26,45 +26,47 @@ import { NavigationService } from '../../services/navigationService';
  */
 export const PixoPauseModal = ({
   visible,
+  mode = 'pause', // 'pause' | 'exit_confirm'
   gameTitle = 'BATTLE IN PROGRESS',
+  gameSubtitle,
   level = 1,
   timeLeft = 30,
   score = 0,
   currentQuestion = 1,
   totalQuestions = 5,
   onResume,
+  onSaveAndExit,
   onExit,
 }) => {
-  const [showExitConfirm, setShowExitConfirm] = useState(false);
+  const isExitConfirmMode = mode === 'exit_confirm';
+
+  const handleExitAction = () => {
+    if (onSaveAndExit) {
+      onSaveAndExit();
+    } else if (onExit) {
+      onExit();
+    }
+  };
 
   // Register high-priority Back handler to absorb Back key while paused
   useEffect(() => {
-    if (!visible) {
-      setShowExitConfirm(false);
-      return;
-    }
+    if (!visible) return;
 
-    // Intercept back actions while pause modal is active
+    // Intercept back actions while pause modal is active: dismiss modal & resume game
     const unregister = NavigationService.registerBackHandler(
       'pixo_pause_modal',
       () => {
-        if (showExitConfirm) {
-          // If in exit confirmation, dismiss confirmation and return to pause menu
-          setShowExitConfirm(false);
-          return true;
-        }
-        // If in main pause menu, resume game or stay in pause menu
         if (onResume) {
           onResume();
           return true;
         }
         return true;
       },
-      90
+      95
     );
 
     return unregister;
-  }, [visible, showExitConfirm, onResume]);
+  }, [visible, onResume]);
 
   if (!visible) return null;
 
@@ -74,8 +76,7 @@ export const PixoPauseModal = ({
       transparent
       animationType="fade"
       onRequestClose={() => {
-        if (showExitConfirm) setShowExitConfirm(false);
-        else if (onResume) onResume();
+        if (onResume) onResume();
       }}
     >
       <View style={styles.overlay}>
@@ -86,29 +87,31 @@ export const PixoPauseModal = ({
             end={{ x: 1, y: 1 }}
             style={styles.dialogGradient}
           >
-            {/* Top Amber Status Header */}
+            {/* Top Status Header */}
             <View style={styles.pauseBadgeWrapper}>
-              <View style={styles.pauseIconBadge}>
+              <View style={[styles.pauseIconBadge, isExitConfirmMode && { borderColor: 'rgba(255, 69, 58, 0.4)', backgroundColor: 'rgba(255, 69, 58, 0.15)' }]}>
                 <Ionicons
-                  name={showExitConfirm ? 'warning' : 'pause'}
+                  name={isExitConfirmMode ? 'warning-outline' : 'pause'}
                   size={28}
-                  color={showExitConfirm ? '#FF453A' : '#FFA000'}
+                  color={isExitConfirmMode ? '#FF453A' : '#FFA000'}
                 />
               </View>
               <View style={styles.titleColumn}>
-                <Text style={styles.eyebrow}>
-                  {showExitConfirm ? 'EXIT CONFIRMATION' : 'TACTICAL PAUSE ENGAGED'}
+                <Text style={[styles.eyebrow, isExitConfirmMode && { color: '#FF453A' }]}>
+                  {isExitConfirmMode ? 'EXIT CONFIRMATION' : 'TACTICAL PAUSE ENGAGED'}
                 </Text>
                 <Text style={styles.headingTitle}>
-                  {showExitConfirm ? 'Exit Current Game?' : 'GAME PAUSED'}
+                  {isExitConfirmMode ? 'Save & Exit Current Game?' : 'GAME PAUSED'}
                 </Text>
               </View>
             </View>
 
-            {/* Middle Section: Game State Snapshot */}
-            {!showExitConfirm ? (
+            {/* Middle Section: Switch based on mode */}
+            {!isExitConfirmMode ? (
+              /* Mode: Tactical Pause HUD */
               <View style={styles.hudContainer}>
                 <Text style={styles.gameTitleLabel}>{gameTitle}</Text>
+                {gameSubtitle ? <Text style={styles.gameSubtitleLabel}>{gameSubtitle}</Text> : null}
 
                 <View style={styles.statsRow}>
                   {/* Time Remaining */}
@@ -118,7 +121,7 @@ export const PixoPauseModal = ({
                     <Text style={styles.statLabel}>TIME LEFT</Text>
                   </View>
 
-                  {/* Level & Question */}
+                  {/* Level & Question/Pair */}
                   <View style={styles.statBox}>
                     <Ionicons name="layers-outline" size={16} color="#00E5FF" style={{ marginBottom: 2 }} />
                     <Text style={styles.statValue}>
@@ -142,7 +145,7 @@ export const PixoPauseModal = ({
                   </Text>
                 </View>
 
-                {/* Primary Actions */}
+                {/* Primary Actions for Pause */}
                 <View style={styles.actionsColumn}>
                   {/* 1. RESUME GAME */}
                   <TouchableOpacity
@@ -162,12 +165,12 @@ export const PixoPauseModal = ({
                     </LinearGradient>
                   </TouchableOpacity>
 
-                  {/* 2. EXIT GAME */}
+                  {/* 2. EXIT GAME (Direct Save & Exit to PIXO Dashboard) */}
                   <TouchableOpacity
                     style={styles.exitBtn}
-                    onPress={() => setShowExitConfirm(true)}
+                    onPress={handleExitAction}
                     activeOpacity={0.8}
-                    accessibilityLabel="Open exit game confirmation"
+                    accessibilityLabel="Exit game and save progress to dashboard"
                   >
                     <Ionicons name="exit-outline" size={17} color="#FFA000" style={{ marginRight: 8 }} />
                     <Text style={styles.exitBtnText}>EXIT GAME</Text>
@@ -175,21 +178,22 @@ export const PixoPauseModal = ({
                 </View>
               </View>
             ) : (
-              /* Exit Confirmation View */
+              /* Mode: Direct Exit Confirmation (Triggered by Back Button) */
               <View style={styles.confirmContainer}>
                 <Text style={styles.confirmMessage}>
                   Are you sure you want to exit?
                 </Text>
                 <Text style={styles.confirmSubMessage}>
-                  Your unfinished game session will be saved in cloud memory so you can resume it later. You will not earn completion rewards until the level is fully cleared.
+                  Your current unfinished game session (Level {level}, Score: {score}, {timeLeft}s left) will be securely saved so you can resume anytime from the PIXO dashboard.
                 </Text>
 
                 <View style={styles.actionsColumn}>
-                  {/* Keep Playing */}
+                  {/* 1. KEEP PLAYING (Smooth Resume) */}
                   <TouchableOpacity
                     style={styles.resumeBtn}
-                    onPress={() => setShowExitConfirm(false)}
+                    onPress={onResume}
                     activeOpacity={0.85}
+                    accessibilityLabel="Keep playing current game"
                   >
                     <LinearGradient
                       colors={['#39FF14', '#00FFA3']}
@@ -202,17 +206,15 @@ export const PixoPauseModal = ({
                     </LinearGradient>
                   </TouchableOpacity>
 
-                  {/* Confirm Exit & Save */}
+                  {/* 2. SAVE & EXIT (Direct to PIXO Dashboard) */}
                   <TouchableOpacity
                     style={styles.confirmExitBtn}
-                    onPress={() => {
-                      setShowExitConfirm(false);
-                      if (onExit) onExit();
-                    }}
+                    onPress={handleExitAction}
                     activeOpacity={0.8}
+                    accessibilityLabel="Save session and return directly to dashboard"
                   >
                     <Ionicons name="save-outline" size={17} color="#FF453A" style={{ marginRight: 8 }} />
-                    <Text style={styles.confirmExitBtnText}>SAVE & EXIT TO LEVEL SELECTION</Text>
+                    <Text style={styles.confirmExitBtnText}>SAVE & EXIT</Text>
                   </TouchableOpacity>
                 </View>
               </View>
@@ -289,6 +291,15 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '800',
     letterSpacing: 0.8,
+    marginBottom: 12,
+    textAlign: 'center',
+  },
+  gameSubtitleLabel: {
+    color: '#00E5FF',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    marginTop: -8,
     marginBottom: 12,
     textAlign: 'center',
   },

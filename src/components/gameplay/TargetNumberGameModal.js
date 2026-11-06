@@ -222,6 +222,7 @@ export const TargetNumberGameModal = ({
   const [currentLevel, setCurrentLevel] = useState(initialLevel || 1);
   const [unlockedLevels, setUnlockedLevels] = useState({ '+': 1, '-': 1, '*': 1, '%': 1 });
   const [isPauseModalOpen, setIsPauseModalOpen] = useState(false);
+  const [pauseModalMode, setPauseModalMode] = useState('pause'); // 'pause' | 'exit_confirm'
   const frozenTimeLeftRef = useRef(30);
 
   // Sync gameState with current navigation route
@@ -762,7 +763,31 @@ export const TargetNumberGameModal = ({
     onClose();
   }, [gameState, onClose, user?.id]);
 
-  // Handle Pause Menu Trigger (Back button during active gameplay)
+  // Handle Back Button Requested during gameplay (Exit Confirmation)
+  const handleBackRequested = useCallback(() => {
+    if (gameState === 'playing') {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      const remaining = endTimeRef.current
+        ? Math.max(1, Math.ceil((endTimeRef.current - Date.now()) / 1000))
+        : (timeLeft || 30);
+      frozenTimeLeftRef.current = remaining;
+      setTimeLeft(remaining);
+      endTimeRef.current = null;
+
+      setPauseModalMode('exit_confirm');
+      setIsPauseModalOpen(true);
+    } else if (gameState === 'select_level') {
+      setGameState('select_mode');
+    } else {
+      if (onClose) onClose();
+      NavigationService.navigateToDashboard();
+    }
+  }, [gameState, timeLeft, onClose]);
+
+  // Handle Pause Menu Trigger (Pause Button)
   const handlePauseGame = useCallback(() => {
     if (gameState !== 'playing') return;
 
@@ -778,10 +803,11 @@ export const TargetNumberGameModal = ({
     setTimeLeft(remaining);
     endTimeRef.current = null; // stop countdown while paused
 
+    setPauseModalMode('pause');
     setIsPauseModalOpen(true);
   }, [gameState, timeLeft]);
 
-  // Handle Resume Game from Pause Menu
+  // Handle Resume Game from Pause Menu or Exit Confirmation
   const handleResumeGame = useCallback(() => {
     const remaining = Math.max(1, frozenTimeLeftRef.current || 1);
     const newEndTime = Date.now() + remaining * 1000;
@@ -796,28 +822,44 @@ export const TargetNumberGameModal = ({
     setIsPauseModalOpen(false);
   }, [user?.id]);
 
-  // Handle Exit Game from Pause Menu (with cloud session save)
-  const handleExitGame = useCallback(async () => {
+  // Handle Save & Exit: Saves session and returns DIRECTLY to PIXO Dashboard
+  const handleSaveAndExit = useCallback(async () => {
     if (timerRef.current) {
       clearInterval(timerRef.current);
       timerRef.current = null;
     }
 
     // Save unfinished session so player can resume exact questions later
-    await GamePersistenceService.updateActiveSession(user?.id, {
-      status: 'in_progress',
-      currentProblemIdx,
-      score,
-      combo,
-      timeLeft: frozenTimeLeftRef.current,
-      userInput: userInputRef.current,
-      answersHistory: answersHistoryRef.current,
-      endedAt: null,
-    });
+    if (user?.id) {
+      await GamePersistenceService.updateActiveSession(user.id, {
+        status: 'SAVED',
+        currentProblemIdx,
+        score,
+        combo,
+        timeLeft: frozenTimeLeftRef.current || timeLeft,
+        userInput: userInputRef.current,
+        answersHistory: answersHistoryRef.current,
+        endedAt: null,
+      });
+    }
 
     setIsPauseModalOpen(false);
-    NavigationService.goBack();
-  }, [user?.id, currentProblemIdx, score, combo]);
+    setGameState('select_mode');
+    if (onClose) onClose();
+    NavigationService.navigateToDashboard();
+  }, [user?.id, currentProblemIdx, score, combo, timeLeft, onClose]);
+
+  // Handle Return to Dashboard (from Game Over or Victory screens)
+  const handleReturnToDashboard = useCallback(() => {
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+    setIsPauseModalOpen(false);
+    setGameState('select_mode');
+    if (onClose) onClose();
+    NavigationService.navigateToDashboard();
+  }, [onClose]);
 
   // Centralized Navigation Back Handler registration
   useEffect(() => {
@@ -827,11 +869,15 @@ export const TargetNumberGameModal = ({
       'target_number_game_modal',
       () => {
         if (isPauseModalOpen) {
-          // Absorb back while pause menu is active
+          handleResumeGame();
           return true;
         }
         if (gameState === 'playing') {
-          handlePauseGame();
+          handleBackRequested();
+          return true;
+        }
+        if (gameState === 'select_level') {
+          setGameState('select_mode');
           return true;
         }
         return false;
@@ -840,7 +886,7 @@ export const TargetNumberGameModal = ({
     );
 
     return unregister;
-  }, [visible, gameState, isPauseModalOpen, handlePauseGame]);
+  }, [visible, gameState, isPauseModalOpen, handleResumeGame, handleBackRequested]);
 
   // Web: lock background page scrolling when modal is open
   useEffect(() => {
@@ -927,13 +973,7 @@ export const TargetNumberGameModal = ({
             <View style={styles.topGameBar}>
               <View style={styles.headerLeftGroup}>
                 <PixoBackButton
-                  onPress={() => {
-                    if (gameState === 'playing') {
-                      handlePauseGame();
-                    } else {
-                      NavigationService.goBack();
-                    }
-                  }}
+                  onPress={handleBackRequested}
                   variant="circle"
                   size={18}
                   style={styles.modalBackArrow}
@@ -958,13 +998,7 @@ export const TargetNumberGameModal = ({
 
               <TouchableOpacity
                 style={styles.closeBtn}
-                onPress={() => {
-                  if (gameState === 'playing') {
-                    handlePauseGame();
-                  } else {
-                    NavigationService.goBack();
-                  }
-                }}
+                onPress={handleBackRequested}
                 activeOpacity={0.7}
                 accessibilityLabel="Close modal"
               >
@@ -1252,6 +1286,16 @@ export const TargetNumberGameModal = ({
                     <Text style={styles.hudBadgeLabel}>SCORE</Text>
                     <Text style={styles.hudBadgeValue}>{score}</Text>
                   </View>
+
+                  <TouchableOpacity
+                    style={styles.hudPausePill}
+                    onPress={handlePauseGame}
+                    activeOpacity={0.8}
+                    accessibilityLabel="Pause game"
+                  >
+                    <Ionicons name="pause" size={13} color="#FFA000" style={{ marginRight: 3 }} />
+                    <Text style={styles.hudPausePillText}>PAUSE</Text>
+                  </TouchableOpacity>
                 </View>
 
                 {/* 30-Second Animated Progress Track */}
@@ -1442,6 +1486,18 @@ export const TargetNumberGameModal = ({
                   )}
 
                   <TouchableOpacity
+                    style={styles.returnDashboardBtn}
+                    onPress={handleReturnToDashboard}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Return directly to PIXO dashboard"
+                  >
+                    <LinearGradient colors={['#0F2414', '#09150C']} style={styles.dashboardBtnGradient}>
+                      <Ionicons name="home" size={15} color="#39FF14" style={{ marginRight: 6 }} />
+                      <Text style={styles.returnDashboardBtnText}>RETURN TO DASHBOARD</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
                     style={styles.replayBtn}
                     onPress={handleBackToMenu}
                     activeOpacity={0.8}
@@ -1496,6 +1552,18 @@ export const TargetNumberGameModal = ({
                   </TouchableOpacity>
 
                   <TouchableOpacity
+                    style={styles.returnDashboardBtn}
+                    onPress={handleReturnToDashboard}
+                    activeOpacity={0.85}
+                    accessibilityLabel="Return directly to PIXO dashboard"
+                  >
+                    <LinearGradient colors={['#0F2414', '#09150C']} style={styles.dashboardBtnGradient}>
+                      <Ionicons name="home" size={15} color="#39FF14" style={{ marginRight: 6 }} />
+                      <Text style={styles.returnDashboardBtnText}>RETURN TO DASHBOARD</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
                     style={styles.replayBtn}
                     onPress={handleBackToMenu}
                     activeOpacity={0.8}
@@ -1506,9 +1574,10 @@ export const TargetNumberGameModal = ({
               </View>
             )}
 
-            {/* Pixo Pause Menu Modal */}
+            {/* Pixo Pause Menu / Exit Confirmation Modal */}
             <PixoPauseModal
               visible={isPauseModalOpen}
+              mode={pauseModalMode}
               gameTitle={`TARGET NUMBER: LEVEL ${currentLevel} (${selectedOperator})`}
               level={currentLevel}
               timeLeft={frozenTimeLeftRef.current || timeLeft}
@@ -1516,7 +1585,7 @@ export const TargetNumberGameModal = ({
               currentQuestion={currentProblemIdx + 1}
               totalQuestions={currentLevelConfig.totalQuestions}
               onResume={handleResumeGame}
-              onExit={handleExitGame}
+              onSaveAndExit={handleSaveAndExit}
             />
           </LinearGradient>
         </View>
@@ -2442,5 +2511,42 @@ const styles = StyleSheet.create({
     fontSize: 11.5,
     fontWeight: '800',
     letterSpacing: 0.5,
+  },
+  hudPausePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 160, 0, 0.15)',
+    borderWidth: 1,
+    borderColor: '#FFA000',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    marginLeft: 4,
+  },
+  hudPausePillText: {
+    color: '#FFA000',
+    fontSize: 10,
+    fontWeight: '900',
+    letterSpacing: 0.5,
+  },
+  returnDashboardBtn: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1.5,
+    borderColor: '#39FF14',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer', boxShadow: '0 0 15px rgba(57, 255, 20, 0.2)' } : {}),
+  },
+  dashboardBtnGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  returnDashboardBtnText: {
+    color: '#39FF14',
+    fontSize: 12.5,
+    fontWeight: '900',
+    letterSpacing: 0.8,
   },
 });

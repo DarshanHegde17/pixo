@@ -96,6 +96,9 @@ class NavigationServiceSingleton {
       'cyber_strike',
       'cyber_strike_levels',
       'cyber_strike_gameplay',
+      'brain_blitz',
+      'brain_blitz_levels',
+      'brain_blitz_gameplay',
       'game_details',
     ];
     return valid.includes(routeId);
@@ -365,6 +368,42 @@ class NavigationServiceSingleton {
     return true; // Return true to tell Android BackHandler not to abruptly kill process
   }
 
+  /**
+   * Directly resets navigation stack to the main PIXO Dashboard (home).
+   * Ensures zero intermediate popups, zero level selection screens, and safe browser history.
+   */
+  navigateToDashboard() {
+    const homeEntry = {
+      id: 'home',
+      title: 'Dashboard',
+      params: {},
+      index: 0,
+      path: '/#home',
+      timestamp: Date.now(),
+    };
+    this.history = [homeEntry];
+    this.currentIndex = 0;
+
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && window.history) {
+      try {
+        window.history.replaceState(
+          {
+            pixoRoute: 'home',
+            pixoIndex: 0,
+            params: {},
+            app: 'pixo',
+          },
+          'Dashboard',
+          window.location.pathname
+        );
+      } catch (e) {
+        console.warn('[NavigationService] replaceState to home failed:', e);
+      }
+    }
+
+    this.notifySubscribers(homeEntry);
+  }
+
   triggerExitConfirmation() {
     for (const listener of this.exitSubscribers) {
       try {
@@ -454,6 +493,12 @@ class NavigationServiceSingleton {
         return 'Cyber Strike • Category Levels';
       case 'cyber_strike_gameplay':
         return 'Cyber Strike • Mission Gameplay';
+      case 'brain_blitz':
+        return 'PIXO Brain Blitz';
+      case 'brain_blitz_levels':
+        return 'Brain Blitz • Level Selection';
+      case 'brain_blitz_gameplay':
+        return 'Brain Blitz • Arena';
       case 'game_details':
         return 'Game Details';
       default:
