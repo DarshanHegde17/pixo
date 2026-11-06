@@ -13,19 +13,38 @@ const STORAGE_KEYS = {
   DAILY_QUESTS_PREFIX: '@pixo_daily_quests_',
   UNLOCKED_LEVEL_PREFIX: '@pixo_game_unlocked_level_',
   COMPLETED_LEVELS_PREFIX: '@pixo_completed_levels_',
+  CLAIMED_MILESTONES_PREFIX: '@pixo_claimed_streak_milestones_',
 };
 
 // Concurrency mutex locks
 let isRestoringStreakLock = false;
 let isExchangingLock = false;
 let isClaimingRewardLock = false;
+let isClaimingMilestoneLock = false;
 
 export const IST_TIMEZONE = 'Asia/Kolkata';
 
 /**
- * Standard milestones for streak badges & rewards (7 to 500 Days)
+ * Standard milestones for streak badges & rewards (7 to 365 Days)
  */
-export const STREAK_MILESTONES = [7, 14, 25, 50, 75, 100, 150, 200, 250, 300, 365, 400, 500];
+export const STREAK_MILESTONES = [7, 14, 25, 50, 75, 100, 150, 200, 250, 300, 365];
+
+/**
+ * 11 Streak Achievement Milestones with titles, badges & rewards
+ */
+export const STREAK_ACHIEVEMENT_MILESTONES = [
+  { days: 7, title: 'Starter Flame', subtitle: '7-Day Streak', icon: 'flame', rewardXp: 100, rewardCoins: 50 },
+  { days: 14, title: 'Consistent Player', subtitle: '14-Day Streak', icon: 'shield-checkmark', rewardXp: 200, rewardCoins: 100 },
+  { days: 25, title: 'Dedicated Gamer', subtitle: '25-Day Streak', icon: 'flash', rewardXp: 350, rewardCoins: 150 },
+  { days: 50, title: 'Rising Legend', subtitle: '50-Day Streak', icon: 'trending-up', rewardXp: 500, rewardCoins: 250 },
+  { days: 75, title: 'Elite Player', subtitle: '75-Day Streak', icon: 'ribbon', rewardXp: 750, rewardCoins: 350 },
+  { days: 100, title: 'Gaming Champion', subtitle: '100-Day Streak', icon: 'trophy', rewardXp: 1000, rewardCoins: 500 },
+  { days: 150, title: 'Master Gamer', subtitle: '150-Day Streak', icon: 'medal', rewardXp: 1500, rewardCoins: 750 },
+  { days: 200, title: 'Legendary Player', subtitle: '200-Day Streak', icon: 'skull', rewardXp: 2000, rewardCoins: 1000 },
+  { days: 250, title: 'Immortal Gamer', subtitle: '250-Day Streak', icon: 'infinite', rewardXp: 2500, rewardCoins: 1250 },
+  { days: 300, title: 'Ultimate Legend', subtitle: '300-Day Streak', icon: 'diamond', rewardXp: 3000, rewardCoins: 1500 },
+  { days: 365, title: 'Eternal Champion', subtitle: '365-Day Streak', icon: 'planet', rewardXp: 5000, rewardCoins: 2500 },
+];
 
 /**
  * 3 Daily Objectives per Master Prompt:
@@ -827,7 +846,7 @@ export const GamingActivityService = {
         currentStreak: 0,
         longestStreak: Math.max(0, storedLongestStreak),
         lastCompletionDate: null,
-        nextMilestone: 3,
+        nextMilestone: 7,
         progressPercent: 0,
         qualifyingDates: new Set(),
         completionCountsByDate: {},
@@ -861,7 +880,7 @@ export const GamingActivityService = {
         currentStreak: 0,
         longestStreak: Math.max(0, storedLongestStreak),
         lastCompletionDate: null,
-        nextMilestone: 3,
+        nextMilestone: 7,
         progressPercent: 0,
         qualifyingDates: new Set(),
         completionCountsByDate: {},
@@ -1869,6 +1888,109 @@ export const GamingActivityService = {
 
   async claimQuestReward(userId, questId) {
     return await this.claimDailyObjective(userId, questId);
+  },
+
+  /**
+   * Retrieves user's claimed streak milestones
+   */
+  async getClaimedStreakMilestones(userId) {
+    if (!userId) return [];
+    const cleanUserId = String(userId).trim();
+    const key = `${STORAGE_KEYS.CLAIMED_MILESTONES_PREFIX}${cleanUserId}`;
+    const list = (await SessionStorage.getItem(key)) || [];
+    return Array.isArray(list) ? list : [];
+  },
+
+  /**
+   * Claims reward for achieving a streak milestone.
+   * - Verifies streak requirement
+   * - Prevents duplicate claims
+   * - Atomically credits XP & Coins
+   * - Records transaction
+   */
+  async claimStreakMilestone(userId, days) {
+    if (!userId || !days) {
+      return { success: false, error: 'User ID and milestone days required.' };
+    }
+    if (isClaimingMilestoneLock) {
+      return { success: false, error: 'A milestone claim is currently processing.' };
+    }
+
+    isClaimingMilestoneLock = true;
+    try {
+      const cleanUserId = String(userId).trim();
+      const numDays = Number(days);
+      const milestone = STREAK_ACHIEVEMENT_MILESTONES.find((m) => m.days === numDays);
+      if (!milestone) {
+        return { success: false, error: `Invalid milestone: ${days} days.` };
+      }
+
+      // Check current streak from streak state, stored state, or user profile
+      const streakStateKey = `${STORAGE_KEYS.STREAK_STATE_PREFIX}${cleanUserId}`;
+      const storedState = await SessionStorage.getItem(streakStateKey);
+      const streakInfo = (await this.getUserStreakState(cleanUserId)) || (await this.calculateUserStreak(cleanUserId));
+      const user = await AuthService.findUserById(cleanUserId);
+      const currentStreak = Math.max(
+        streakInfo?.currentStreak || 0,
+        storedState?.currentStreak || 0,
+        typeof user?.streak === 'number' ? user.streak : 0
+      );
+      if (currentStreak < numDays) {
+        return {
+          success: false,
+          error: `Streak requirement not met! You need ${numDays} consecutive days (current: ${currentStreak}).`,
+        };
+      }
+
+      // Check already claimed
+      const key = `${STORAGE_KEYS.CLAIMED_MILESTONES_PREFIX}${cleanUserId}`;
+      const claimedList = await this.getClaimedStreakMilestones(cleanUserId);
+      const alreadyClaimed = claimedList.some((c) => c.days === numDays);
+      if (alreadyClaimed) {
+        return { success: false, error: `Milestone for ${numDays} days already claimed.` };
+      }
+
+      const claimRecord = {
+        days: numDays,
+        title: milestone.title,
+        rewardXp: milestone.rewardXp,
+        rewardCoins: milestone.rewardCoins,
+        claimedAt: new Date().toISOString(),
+      };
+      claimedList.push(claimRecord);
+      await SessionStorage.setItem(key, claimedList);
+
+      // Record transaction
+      const transaction = {
+        id: `tx_milestone_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+        userId: cleanUserId,
+        transactionType: 'STREAK_MILESTONE_REWARD',
+        xpAmount: milestone.rewardXp,
+        coinAmount: milestone.rewardCoins,
+        gameDifficulty: numDays,
+        gameId: `milestone_${numDays}d`,
+        transactionDate: new Date().toISOString(),
+        transactionStatus: 'COMPLETED',
+      };
+      await this.recordTransaction(cleanUserId, transaction);
+
+      // Update user balances
+      const updatedUser = await AuthService.updateUserBalances(cleanUserId, {
+        xpDelta: milestone.rewardXp,
+        coinsDelta: milestone.rewardCoins,
+      });
+
+      return {
+        success: true,
+        milestone,
+        claimedList,
+        xpAwarded: milestone.rewardXp,
+        coinsAwarded: milestone.rewardCoins,
+        user: updatedUser,
+      };
+    } finally {
+      isClaimingMilestoneLock = false;
+    }
   },
 
   /**

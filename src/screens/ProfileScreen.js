@@ -151,12 +151,16 @@ export const ProfileScreen = ({
             <DailyStreakCalendar
               completions={completions}
               onSelectSession={(comp) => setSelectedCompletionReport(comp)}
+              streakInfo={streakInfo}
             />
 
             {/* ========================================================= */}
-            {/* 4. MONTHLY ACTIVITY HEATMAP                               */}
+            {/* 4. GITHUB-STYLE CONTINUOUS 1-YEAR ACTIVITY HEATMAP        */}
             {/* ========================================================= */}
-            <ActivityHeatmap completions={completions} />
+            <ActivityHeatmap
+              completions={completions}
+              streakInfo={streakInfo}
+            />
 
             {/* ========================================================= */}
             {/* 5. CURRENT & LONGEST STREAK SUMMARY                       */}
@@ -164,6 +168,8 @@ export const ProfileScreen = ({
             <StreakSummaryCard
               streakInfo={streakInfo}
               completions={completions}
+              userId={user?.id}
+              onClaimMilestoneReward={loadProfileData}
             />
 
             {/* ========================================================= */}
@@ -177,9 +183,16 @@ export const ProfileScreen = ({
             />
 
             {/* ========================================================= */}
-            {/* 7. MONTHLY GAMING REPORT & CHART                          */}
+            {/* 7. PLAYER INSIGHTS & GAMING ANALYTICS DASHBOARD           */}
             {/* ========================================================= */}
-            <MonthlyGamingReport userId={user?.id} />
+            <MonthlyGamingReport
+              userId={user?.id}
+              completions={completions}
+              sessions={sessions}
+              streakInfo={streakInfo}
+              userCoins={user?.coins}
+              userXp={user?.xp}
+            />
           </>
         )}
       </ScrollView>

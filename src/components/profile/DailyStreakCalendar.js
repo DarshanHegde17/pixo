@@ -5,17 +5,19 @@ import {
   StyleSheet,
   TouchableOpacity,
   Modal,
+  ScrollView,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, borderRadius } from '../../theme';
-import { toDateKey, getAppTimezone } from '../../services/gamingActivityService';
+import { colors } from '../../theme';
+import { toDateKey, getAppTimezone, formatDuration } from '../../services/gamingActivityService';
 
 const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
 
 export const DailyStreakCalendar = ({
   completions = [],
   onSelectSession,
+  streakInfo = {},
 }) => {
   const timezone = getAppTimezone();
   const today = new Date();
@@ -63,7 +65,22 @@ export const DailyStreakCalendar = ({
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDayOfWeek = new Date(year, month, 1).getDay(); // 0 (Sun) to 6 (Sat)
 
-  // Construct calendar cells
+  // Monthly stats calculations
+  const { completedDaysInMonth, monthlyCompletionPercentage } = useMemo(() => {
+    let count = 0;
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateKey = `${year}-${String(month + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      if (completedDateSet.has(dateKey)) {
+        count++;
+      }
+    }
+    const pct = daysInMonth > 0 ? Math.round((count / daysInMonth) * 100) : 0;
+    return { completedDaysInMonth: count, monthlyCompletionPercentage: pct };
+  }, [year, month, daysInMonth, completedDateSet]);
+
+  const currentStreakCount = typeof streakInfo?.currentStreak === 'number' ? streakInfo.currentStreak : 0;
+
+  // Construct compact 7-column calendar cells
   const calendarCells = useMemo(() => {
     const cells = [];
     // Padding before day 1
@@ -84,6 +101,12 @@ export const DailyStreakCalendar = ({
         (c) => Array.isArray(c.achievements) && c.achievements.length > 0
       );
 
+      // Aggregate statistics for this day
+      const gamesCount = dayCompletions.filter((c) => !c.gameId?.startsWith('q')).length;
+      const missionsCount = dayCompletions.filter((c) => c.gameId?.startsWith('q')).length;
+      const totalXp = dayCompletions.reduce((acc, c) => acc + (c.xpAwarded || 0), 0);
+      const totalDuration = dayCompletions.reduce((acc, c) => acc + (c.durationSeconds || 0), 0);
+
       cells.push({
         type: 'day',
         day: d,
@@ -92,6 +115,10 @@ export const DailyStreakCalendar = ({
         isToday,
         isFuture,
         hasMilestone,
+        gamesCount,
+        missionsCount,
+        totalXp,
+        totalDuration,
         completions: dayCompletions,
         key: dateKey,
       });
@@ -102,19 +129,18 @@ export const DailyStreakCalendar = ({
   return (
     <View style={styles.container}>
       <View style={styles.card}>
-        {/* Header Block */}
+        {/* ========================================================= */}
+        {/* 1. COMPACT HEADER BLOCK                                   */}
+        {/* ========================================================= */}
         <View style={styles.header}>
           <View style={styles.titleBlock}>
             <View style={styles.titleIconRow}>
               <View style={styles.calendarIconWrap}>
-                <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+                <Ionicons name="calendar-outline" size={16} color="#39FF14" />
               </View>
-              <Text style={styles.titleEyebrow}>VERIFIED CALENDAR</Text>
+              <Text style={styles.titleEyebrow}>DAILY STREAK CALENDAR</Text>
             </View>
-            <Text style={styles.titleText}>YOUR DAILY STREAK</Text>
-            <Text style={styles.subtitleText}>
-              Complete a game or mission. Keep your legend alive.
-            </Text>
+            <Text style={styles.titleText}>ACTIVITY LOG</Text>
           </View>
 
           {/* Month Navigation & Today Shortcut */}
@@ -125,7 +151,7 @@ export const DailyStreakCalendar = ({
               activeOpacity={0.7}
               accessibilityLabel="Previous month"
             >
-              <Ionicons name="chevron-back" size={18} color={colors.primaryText} />
+              <Ionicons name="chevron-back" size={16} color="#FFFFFF" />
             </TouchableOpacity>
 
             <View style={styles.monthBadge}>
@@ -138,7 +164,7 @@ export const DailyStreakCalendar = ({
               activeOpacity={0.7}
               accessibilityLabel="Next month"
             >
-              <Ionicons name="chevron-forward" size={18} color={colors.primaryText} />
+              <Ionicons name="chevron-forward" size={16} color="#FFFFFF" />
             </TouchableOpacity>
 
             <TouchableOpacity
@@ -151,7 +177,37 @@ export const DailyStreakCalendar = ({
           </View>
         </View>
 
-        {/* Weekday Row */}
+        {/* ========================================================= */}
+        {/* 2. THREE-PILL COMPACT STATUS SUMMARY BANNER               */}
+        {/* ========================================================= */}
+        <View style={styles.headerStatsRow}>
+          {/* Current Streak Pill */}
+          <View style={styles.statPill}>
+            <Ionicons name="flame" size={13} color="#FF8A00" style={{ marginRight: 5 }} />
+            <Text style={styles.statPillLabel}>STREAK:</Text>
+            <Text style={[styles.statPillValue, { color: '#FF8A00' }]}>{currentStreakCount} DAYS</Text>
+          </View>
+
+          {/* Completed Days Pill */}
+          <View style={styles.statPill}>
+            <Ionicons name="checkmark-circle" size={13} color="#39FF14" style={{ marginRight: 5 }} />
+            <Text style={styles.statPillLabel}>COMPLETED:</Text>
+            <Text style={[styles.statPillValue, { color: '#39FF14' }]}>
+              {completedDaysInMonth} / {daysInMonth}
+            </Text>
+          </View>
+
+          {/* Monthly Completion Rate Pill */}
+          <View style={styles.statPill}>
+            <Ionicons name="pie-chart" size={13} color="#00E5FF" style={{ marginRight: 5 }} />
+            <Text style={styles.statPillLabel}>RATE:</Text>
+            <Text style={[styles.statPillValue, { color: '#00E5FF' }]}>{monthlyCompletionPercentage}%</Text>
+          </View>
+        </View>
+
+        {/* ========================================================= */}
+        {/* 3. COMPACT 7-COLUMN WEEKDAY HEADER                        */}
+        {/* ========================================================= */}
         <View style={styles.weekdaysRow}>
           {WEEKDAYS.map((wd) => (
             <View key={wd} style={styles.weekdayCell}>
@@ -160,7 +216,9 @@ export const DailyStreakCalendar = ({
           ))}
         </View>
 
-        {/* Calendar Grid */}
+        {/* ========================================================= */}
+        {/* 4. COMPACT 7-COLUMN GRID OF SMALL ROUNDED-SQUARE CELLS    */}
+        {/* ========================================================= */}
         <View style={styles.grid}>
           {calendarCells.map((cell) => {
             if (cell.type === 'empty') {
@@ -174,12 +232,11 @@ export const DailyStreakCalendar = ({
                   styles.dayCell,
                   cell.isCompleted && styles.dayCellCompleted,
                   cell.isToday && !cell.isCompleted && styles.dayCellTodayTarget,
+                  cell.isToday && cell.isCompleted && styles.dayCellTodayCompleted,
                   cell.isFuture && styles.dayCellFuture,
                 ]}
-                activeOpacity={cell.isCompleted ? 0.7 : 0.9}
-                onPress={() => {
-                  setSelectedDayModal(cell);
-                }}
+                activeOpacity={0.7}
+                onPress={() => setSelectedDayModal(cell)}
               >
                 <Text
                   style={[
@@ -192,21 +249,17 @@ export const DailyStreakCalendar = ({
                   {cell.day}
                 </Text>
 
-                {/* Milestone orange star indicator */}
-                {cell.hasMilestone && (
-                  <View style={styles.milestoneStarMarker}>
-                    <Ionicons
-                      name="star"
-                      size={9}
-                      color={cell.isCompleted ? '#050705' : colors.burntOrange}
-                    />
+                {/* Small flame icon for streak-completed days */}
+                {cell.isCompleted && (
+                  <View style={styles.cellIconBadge}>
+                    <Ionicons name="flame" size={8} color="#FF8A00" />
                   </View>
                 )}
 
-                {/* Green verified check badge for completed date */}
-                {cell.isCompleted && (
-                  <View style={styles.completedMiniCheck}>
-                    <Ionicons name="checkmark" size={10} color="#050705" />
+                {/* Small star icon for achievement dates */}
+                {cell.hasMilestone && (
+                  <View style={styles.milestoneStarBadge}>
+                    <Ionicons name="star" size={8} color="#FFD700" />
                   </View>
                 )}
               </TouchableOpacity>
@@ -214,38 +267,33 @@ export const DailyStreakCalendar = ({
           })}
         </View>
 
-        {/* Legend */}
+        {/* ========================================================= */}
+        {/* 5. COMPACT GAMING LEGEND                                  */}
+        {/* ========================================================= */}
         <View style={styles.legendContainer}>
           <View style={styles.legendItem}>
-            <View style={[styles.legendBox, { backgroundColor: colors.primary }]} />
-            <Text style={styles.legendLabel}>Verified Completed Day</Text>
+            <View style={[styles.legendBox, styles.legendBoxCompleted]}>
+              <Ionicons name="flame" size={8} color="#FF8A00" />
+            </View>
+            <Text style={styles.legendLabel}>Completed Streak</Text>
           </View>
           <View style={styles.legendItem}>
-            <View
-              style={[
-                styles.legendBox,
-                {
-                  backgroundColor: 'transparent',
-                  borderWidth: 1.5,
-                  borderColor: colors.burntOrange,
-                },
-              ]}
-            />
+            <View style={[styles.legendBox, styles.legendBoxTarget]} />
             <Text style={styles.legendLabel}>Today's Target</Text>
           </View>
           <View style={styles.legendItem}>
-            <View style={[styles.legendBox, { backgroundColor: '#111712' }]} />
-            <Text style={styles.legendLabel}>No Completion</Text>
+            <View style={[styles.legendBox, styles.legendBoxIncomplete]} />
+            <Text style={styles.legendLabel}>Incomplete</Text>
           </View>
           <View style={styles.legendItem}>
-            <Ionicons name="star" size={12} color={colors.warmOrange} style={{ marginRight: 4 }} />
-            <Text style={styles.legendLabel}>Achievement Unlocked</Text>
+            <Ionicons name="star" size={10} color="#FFD700" style={{ marginRight: 4 }} />
+            <Text style={styles.legendLabel}>Achievement</Text>
           </View>
         </View>
       </View>
 
       {/* ========================================================= */}
-      {/* DAY DETAIL INSPECTION MODAL                               */}
+      {/* 6. INTERACTIVE DATE ACTIVITY INSPECTION POPUP             */}
       {/* ========================================================= */}
       <Modal
         visible={!!selectedDayModal}
@@ -255,72 +303,140 @@ export const DailyStreakCalendar = ({
       >
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
+            {/* Header with Selected Date */}
             <View style={styles.modalHeader}>
               <View>
-                <Text style={styles.modalEyebrow}>DAY ACTIVITY INSPECTION</Text>
+                <Text style={styles.modalEyebrow}>TACTICAL ACTIVITY REPORT</Text>
                 <Text style={styles.modalDateTitle}>{selectedDayModal?.dateKey}</Text>
               </View>
               <TouchableOpacity
                 onPress={() => setSelectedDayModal(null)}
+                style={styles.modalCloseBtn}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
-                <Ionicons name="close" size={22} color={colors.textSecondary} />
+                <Ionicons name="close" size={18} color="#929B92" />
               </TouchableOpacity>
             </View>
 
-            {selectedDayModal?.isCompleted ? (
-              <View style={styles.modalCompletionsList}>
-                <View style={styles.completedBanner}>
-                  <Ionicons name="shield-checkmark" size={20} color={colors.primary} style={{ marginRight: 8 }} />
-                  <Text style={styles.completedBannerText}>
-                    {selectedDayModal.completions.length} Qualifying{' '}
-                    {selectedDayModal.completions.length === 1 ? 'Completion' : 'Completions'} Recorded
-                  </Text>
-                </View>
+            {/* Status Banner */}
+            <View
+              style={[
+                styles.modalStatusBanner,
+                selectedDayModal?.isCompleted
+                  ? styles.modalStatusCompleted
+                  : selectedDayModal?.isToday
+                  ? styles.modalStatusToday
+                  : styles.modalStatusIncomplete,
+              ]}
+            >
+              <Ionicons
+                name={
+                  selectedDayModal?.isCompleted
+                    ? 'shield-checkmark'
+                    : selectedDayModal?.isToday
+                    ? 'flame'
+                    : 'close-circle'
+                }
+                size={16}
+                color={
+                  selectedDayModal?.isCompleted
+                    ? '#39FF14'
+                    : selectedDayModal?.isToday
+                    ? '#FF8A00'
+                    : '#7A8E7E'
+                }
+                style={{ marginRight: 6 }}
+              />
+              <Text
+                style={[
+                  styles.modalStatusText,
+                  {
+                    color: selectedDayModal?.isCompleted
+                      ? '#39FF14'
+                      : selectedDayModal?.isToday
+                      ? '#FF8A00'
+                      : '#929B92',
+                  },
+                ]}
+              >
+                {selectedDayModal?.isCompleted
+                  ? 'VERIFIED COMPLETED DAY'
+                  : selectedDayModal?.isToday
+                  ? "TODAY'S STREAK TARGET (IN PROGRESS)"
+                  : selectedDayModal?.isFuture
+                  ? 'UPCOMING CALENDAR DATE'
+                  : 'NO ACTIVITY RECORDED'}
+              </Text>
+            </View>
 
-                {selectedDayModal.completions.map((comp) => (
-                  <TouchableOpacity
-                    key={comp.id}
-                    style={styles.dayCompItem}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      setSelectedDayModal(null);
-                      if (onSelectSession) onSelectSession(comp);
-                    }}
-                  >
-                    <View style={styles.dayCompIcon}>
-                      <Ionicons name={comp.icon || 'trophy'} size={18} color={colors.primary} />
-                    </View>
-                    <View style={styles.dayCompInfo}>
-                      <Text style={styles.dayCompTitle}>{comp.gameTitle}</Text>
-                      <Text style={styles.dayCompMeta}>
-                        {comp.gameMode} • Result: {comp.result}
-                      </Text>
-                    </View>
-                    <View style={styles.dayCompScoreWrap}>
-                      <Text style={styles.dayCompScore}>{comp.score?.toLocaleString()} pts</Text>
-                      <Text style={styles.dayCompXp}>+{comp.xpAwarded} XP</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
+            {/* 4 Key Statistics Cards */}
+            <View style={styles.modalStatsGrid}>
+              <View style={styles.modalStatItem}>
+                <Text style={styles.modalStatLabel}>GAMES COMPLETED</Text>
+                <Text style={[styles.modalStatValue, { color: '#00E5FF' }]}>
+                  {selectedDayModal?.gamesCount || 0}
+                </Text>
+              </View>
+              <View style={styles.modalStatItem}>
+                <Text style={styles.modalStatLabel}>MISSIONS COMPLETED</Text>
+                <Text style={[styles.modalStatValue, { color: '#39FF14' }]}>
+                  {selectedDayModal?.missionsCount || 0}
+                </Text>
+              </View>
+              <View style={styles.modalStatItem}>
+                <Text style={styles.modalStatLabel}>TOTAL XP EARNED</Text>
+                <Text style={[styles.modalStatValue, { color: '#FFD700' }]}>
+                  +{selectedDayModal?.totalXp || 0} XP
+                </Text>
+              </View>
+              <View style={styles.modalStatItem}>
+                <Text style={styles.modalStatLabel}>PLAY DURATION</Text>
+                <Text style={[styles.modalStatValue, { color: '#FFFFFF' }]}>
+                  {formatDuration(selectedDayModal?.totalDuration || 0)}
+                </Text>
+              </View>
+            </View>
+
+            {/* Completed sessions list */}
+            {selectedDayModal?.completions && selectedDayModal.completions.length > 0 ? (
+              <View style={styles.modalSessionsWrap}>
+                <Text style={styles.modalSessionsHeading}>COMPLETED GAMEPLAY SESSIONS</Text>
+                <ScrollView style={styles.modalSessionsList} showsVerticalScrollIndicator={false}>
+                  {selectedDayModal.completions.map((comp) => (
+                    <TouchableOpacity
+                      key={comp.id}
+                      style={styles.modalSessionRow}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        setSelectedDayModal(null);
+                        if (onSelectSession) onSelectSession(comp);
+                      }}
+                    >
+                      <View style={styles.modalSessionIcon}>
+                        <Ionicons name={comp.icon || 'game-controller'} size={15} color="#39FF14" />
+                      </View>
+                      <View style={styles.modalSessionInfo}>
+                        <Text style={styles.modalSessionTitle}>{comp.gameTitle}</Text>
+                        <Text style={styles.modalSessionSubtitle}>
+                          {comp.gameMode} • {formatDuration(comp.durationSeconds)}
+                        </Text>
+                      </View>
+                      <View style={styles.modalSessionReward}>
+                        <Text style={styles.modalSessionXp}>+{comp.xpAwarded} XP</Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
               </View>
             ) : (
-              <View style={styles.modalEmptyState}>
-                <Ionicons name="moon-outline" size={38} color={colors.textMuted} style={{ marginBottom: 10 }} />
-                <Text style={styles.modalEmptyTitle}>No Qualifying Completion</Text>
-                <Text style={styles.modalEmptyDesc}>
-                  Under the strict completion rule, starting a session or opening the dashboard does not qualify.
-                  Only fully verified games and missions count!
+              <View style={styles.modalEmptyBox}>
+                <Text style={styles.modalEmptyText}>
+                  {selectedDayModal?.isFuture
+                    ? 'Log in on this day to record verified gameplay activity.'
+                    : 'No qualifying game completions were logged on this date.'}
                 </Text>
               </View>
             )}
-
-            <TouchableOpacity
-              style={styles.modalCloseBtn}
-              onPress={() => setSelectedDayModal(null)}
-            >
-              <Text style={styles.modalCloseBtnText}>CLOSE</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -332,336 +448,424 @@ const styles = StyleSheet.create({
   container: {
     width: '100%',
     paddingHorizontal: 16,
-    marginBottom: 28,
+    marginBottom: 20,
   },
   card: {
-    backgroundColor: colors.cardBackground,
-    borderRadius: 18,
+    backgroundColor: '#0A130C',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.24)',
-    padding: 20,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
+    borderColor: 'rgba(57, 255, 20, 0.22)',
+    padding: 14,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 4px 20px rgba(0, 0, 0, 0.6)' } : {}),
   },
+
+  // 1. Header
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    marginBottom: 10,
     flexWrap: 'wrap',
-    gap: 14,
-    marginBottom: 18,
+    gap: 8,
   },
   titleBlock: {
     flex: 1,
-    minWidth: 220,
+    minWidth: 140,
   },
   titleIconRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 4,
+    marginBottom: 2,
   },
   calendarIconWrap: {
-    width: 28,
-    height: 28,
-    borderRadius: 6,
-    backgroundColor: 'rgba(57, 255, 20, 0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
+    marginRight: 6,
   },
   titleEyebrow: {
     fontSize: 10,
-    fontWeight: '800',
-    color: colors.primary,
-    letterSpacing: 1.5,
+    fontWeight: '900',
+    color: '#39FF14',
+    letterSpacing: 1.2,
   },
   titleText: {
-    fontSize: 20,
+    fontSize: 16,
     fontWeight: '900',
-    color: colors.primaryText,
+    color: '#FFFFFF',
     letterSpacing: 0.5,
-    fontFamily: Platform.OS === 'web' ? 'Space Grotesk, sans-serif' : undefined,
-  },
-  subtitleText: {
-    fontSize: 12,
-    color: colors.secondaryText,
-    marginTop: 2,
   },
   navControls: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: 5,
   },
   navButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: colors.elevatedSurface,
+    width: 28,
+    height: 28,
+    borderRadius: 7,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.2)',
+    borderColor: 'rgba(255, 255, 255, 0.1)',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
   },
   monthBadge: {
-    backgroundColor: colors.elevatedSurface,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    backgroundColor: 'rgba(57, 255, 20, 0.08)',
+    borderRadius: 7,
     borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.3)',
+    borderColor: 'rgba(57, 255, 20, 0.25)',
   },
   monthBadgeText: {
-    fontSize: 12,
+    fontSize: 10.5,
     fontWeight: '800',
-    color: colors.primaryText,
+    color: '#39FF14',
     letterSpacing: 0.5,
   },
   todayShortcutBtn: {
-    backgroundColor: 'rgba(255, 106, 0, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    backgroundColor: 'rgba(255, 138, 0, 0.15)',
+    borderRadius: 7,
     borderWidth: 1,
-    borderColor: colors.burntOrange,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8,
+    borderColor: 'rgba(255, 138, 0, 0.4)',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
   },
   todayShortcutText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: colors.warmOrange,
-    letterSpacing: 0.5,
+    fontSize: 9.5,
+    fontWeight: '900',
+    color: '#FF8A00',
+    letterSpacing: 0.6,
   },
+
+  // 2. Three-Pill Summary Row
+  headerStatsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 12,
+  },
+  statPill: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    paddingVertical: 5,
+    paddingHorizontal: 4,
+  },
+  statPillLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#7A8E7E',
+    marginRight: 4,
+  },
+  statPillValue: {
+    fontSize: 9.5,
+    fontWeight: '900',
+  },
+
+  // 3. Weekday Row
   weekdaysRow: {
     flexDirection: 'row',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   weekdayCell: {
     flex: 1,
     alignItems: 'center',
-    paddingVertical: 6,
+    justifyContent: 'center',
+    paddingVertical: 2,
   },
   weekdayText: {
-    fontSize: 11,
+    fontSize: 9.5,
     fontWeight: '800',
-    color: colors.mutedText,
+    color: '#6E7E70',
     letterSpacing: 0.5,
   },
+
+  // 4. 7-Column Grid
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
+    rowGap: 5,
   },
   dayCellEmpty: {
-    width: '14.28%',
+    width: '14.285%',
     aspectRatio: 1,
-    padding: 3,
+    maxWidth: 42,
   },
   dayCell: {
-    width: '14.28%',
+    width: '14.285%',
+    maxWidth: 42,
     aspectRatio: 1,
-    padding: 3,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 8,
-    backgroundColor: '#0F1611',
+    backgroundColor: '#0D150F',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.04)',
-    marginVertical: 2,
+    borderColor: 'rgba(255, 255, 255, 0.05)',
     position: 'relative',
+    marginVertical: 1,
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
   },
   dayCellCompleted: {
-    backgroundColor: colors.primary,
-    borderColor: colors.emerald,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.7,
-    shadowRadius: 8,
+    backgroundColor: 'rgba(57, 255, 20, 0.16)',
+    borderColor: '#39FF14',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 0 8px rgba(57, 255, 20, 0.35)' } : {}),
   },
   dayCellTodayTarget: {
-    borderColor: colors.burntOrange,
-    borderWidth: 1.8,
-    backgroundColor: 'rgba(255, 106, 0, 0.08)',
+    borderColor: '#FF8A00',
+    borderWidth: 1.5,
+    backgroundColor: 'rgba(255, 138, 0, 0.12)',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 0 8px rgba(255, 138, 0, 0.4)' } : {}),
+  },
+  dayCellTodayCompleted: {
+    borderColor: '#39FF14',
+    borderWidth: 1.5,
+    backgroundColor: 'rgba(57, 255, 20, 0.22)',
+    ...(Platform.OS === 'web' ? { boxShadow: '0 0 10px rgba(57, 255, 20, 0.5)' } : {}),
   },
   dayCellFuture: {
     opacity: 0.35,
-    backgroundColor: '#090E0A',
+    backgroundColor: '#080E09',
   },
   dayNumberText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.primaryText,
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#929B92',
   },
   dayNumberTextCompleted: {
-    color: '#050705',
+    color: '#FFFFFF',
     fontWeight: '900',
   },
   dayNumberTextToday: {
-    color: colors.warmOrange,
+    color: '#FF8A00',
     fontWeight: '900',
   },
   dayNumberTextFuture: {
-    color: colors.mutedText,
+    color: '#4A584C',
   },
-  milestoneStarMarker: {
+  cellIconBadge: {
     position: 'absolute',
     top: 2,
-    right: 3,
-  },
-  completedMiniCheck: {
-    position: 'absolute',
-    bottom: 2,
     right: 2,
   },
+  milestoneStarBadge: {
+    position: 'absolute',
+    bottom: 2,
+    left: 2,
+  },
+
+  // 5. Legend
   legendContainer: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 14,
-    marginTop: 18,
-    paddingTop: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    marginTop: 12,
+    paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: 'rgba(57, 255, 20, 0.12)',
+    borderTopColor: 'rgba(255, 255, 255, 0.05)',
+    flexWrap: 'wrap',
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
   },
   legendBox: {
-    width: 12,
-    height: 12,
-    borderRadius: 3,
-    marginRight: 6,
+    width: 14,
+    height: 14,
+    borderRadius: 4,
+    marginRight: 5,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  legendBoxCompleted: {
+    backgroundColor: 'rgba(57, 255, 20, 0.2)',
+    borderWidth: 1,
+    borderColor: '#39FF14',
+  },
+  legendBoxTarget: {
+    backgroundColor: 'rgba(255, 138, 0, 0.2)',
+    borderWidth: 1.5,
+    borderColor: '#FF8A00',
+  },
+  legendBoxIncomplete: {
+    backgroundColor: '#0D150F',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   legendLabel: {
-    fontSize: 11,
-    color: colors.secondaryText,
+    fontSize: 9.5,
+    fontWeight: '700',
+    color: '#7A8E7E',
   },
 
-  // Modal styles
+  // 6. Interactive Modal
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(5, 7, 5, 0.88)',
+    backgroundColor: 'rgba(0, 0, 0, 0.8)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 20,
   },
   modalCard: {
     width: '100%',
-    maxWidth: 440,
-    backgroundColor: colors.cardBackground,
-    borderRadius: 18,
+    maxWidth: 420,
+    backgroundColor: '#0D1610',
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: 'rgba(57, 255, 20, 0.3)',
-    padding: 22,
+    padding: 16,
+    ...(Platform.OS === 'web' ? { boxShadow: '0 10px 30px rgba(0, 0, 0, 0.9)' } : {}),
   },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'flex-start',
-    marginBottom: 16,
+    marginBottom: 10,
   },
   modalEyebrow: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: colors.primary,
+    fontSize: 9.5,
+    fontWeight: '900',
+    color: '#39FF14',
     letterSpacing: 1,
   },
   modalDateTitle: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: '900',
-    color: colors.primaryText,
+    color: '#FFFFFF',
     marginTop: 2,
-  },
-  completedBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: 'rgba(57, 255, 20, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.3)',
-    padding: 10,
-    borderRadius: 8,
-    marginBottom: 14,
-  },
-  completedBannerText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  modalCompletionsList: {
-    gap: 8,
-    marginBottom: 16,
-  },
-  dayCompItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: colors.elevatedSurface,
-    padding: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.2)',
-  },
-  dayCompIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: 'rgba(57, 255, 20, 0.12)',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
-  },
-  dayCompInfo: {
-    flex: 1,
-  },
-  dayCompTitle: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: colors.primaryText,
-  },
-  dayCompMeta: {
-    fontSize: 11,
-    color: colors.secondaryText,
-    marginTop: 2,
-  },
-  dayCompScoreWrap: {
-    alignItems: 'flex-end',
-  },
-  dayCompScore: {
-    fontSize: 12,
-    fontWeight: '800',
-    color: colors.primary,
-  },
-  dayCompXp: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: colors.warmOrange,
-  },
-  modalEmptyState: {
-    alignItems: 'center',
-    paddingVertical: 20,
-    marginBottom: 14,
-  },
-  modalEmptyTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: colors.primaryText,
-    marginBottom: 6,
-  },
-  modalEmptyDesc: {
-    fontSize: 12,
-    color: colors.secondaryText,
-    textAlign: 'center',
-    lineHeight: 18,
   },
   modalCloseBtn: {
-    backgroundColor: colors.elevatedSurface,
-    paddingVertical: 10,
-    borderRadius: 8,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(57, 255, 20, 0.2)',
+    justifyContent: 'center',
+    ...(Platform.OS === 'web' ? { cursor: 'pointer' } : {}),
   },
-  modalCloseBtnText: {
-    fontSize: 12,
+  modalStatusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+    borderRadius: 8,
+    marginBottom: 12,
+  },
+  modalStatusCompleted: {
+    backgroundColor: 'rgba(57, 255, 20, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(57, 255, 20, 0.3)',
+  },
+  modalStatusToday: {
+    backgroundColor: 'rgba(255, 138, 0, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 138, 0, 0.35)',
+  },
+  modalStatusIncomplete: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+  },
+  modalStatusText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  modalStatsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 12,
+  },
+  modalStatItem: {
+    flex: 1,
+    minWidth: '45%',
+    backgroundColor: 'rgba(0, 0, 0, 0.35)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    padding: 8,
+  },
+  modalStatLabel: {
+    fontSize: 8.5,
     fontWeight: '700',
-    color: colors.primaryText,
+    color: '#7A8E7E',
+    marginBottom: 2,
+  },
+  modalStatValue: {
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  modalSessionsWrap: {
+    marginTop: 4,
+  },
+  modalSessionsHeading: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#929B92',
+    letterSpacing: 0.8,
+    marginBottom: 6,
+  },
+  modalSessionsList: {
+    maxHeight: 140,
+  },
+  modalSessionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+    padding: 8,
+    marginBottom: 6,
+  },
+  modalSessionIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 6,
+    backgroundColor: 'rgba(57, 255, 20, 0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 8,
+  },
+  modalSessionInfo: {
+    flex: 1,
+  },
+  modalSessionTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  modalSessionSubtitle: {
+    fontSize: 9.5,
+    fontWeight: '600',
+    color: '#7A8E7E',
+  },
+  modalSessionReward: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(0, 229, 255, 0.1)',
+    borderRadius: 4,
+  },
+  modalSessionXp: {
+    fontSize: 9.5,
+    fontWeight: '900',
+    color: '#00E5FF',
+  },
+  modalEmptyBox: {
+    padding: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalEmptyText: {
+    fontSize: 10.5,
+    color: '#7A8E7E',
+    textAlign: 'center',
   },
 });
