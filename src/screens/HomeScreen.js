@@ -20,7 +20,9 @@ import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunner
 import { TargetNumberGameModal } from '../components/gameplay/TargetNumberGameModal';
 import { LogicCodeGameModal } from '../components/gameplay/LogicCodeGameModal';
 import { BrainBlitzGameModal } from '../components/gameplay/BrainBlitzGameModal';
+import { PixelKingdomGameModal } from '../components/gameplay/PixelKingdomGameModal';
 import { BrainBlitzPersistenceService } from '../services/brainBlitzPersistenceService';
+import { PixelKingdomPersistenceService } from '../services/pixelKingdomPersistenceService';
 import { RestoreStreakModal } from '../components/profile/RestoreStreakModal';
 import { CoinStoreScreen } from './CoinStoreScreen';
 import {
@@ -104,20 +106,21 @@ export const ALL_GAMES = [
   },
   {
     id: 'g_retro_adv',
-    title: 'Retro Adventure',
-    category: 'Retro 8-Bit Pixel Quest',
+    title: 'Pixel Kingdom Adventure',
+    category: '8-Bit Retro Platform Adventure',
     catId: 'retro',
     rating: '4.8',
-    reviews: '9.2k',
-    badge: '8-BIT CLASSIC',
+    reviews: '14.5k',
+    badge: '10 STAGES • 4 BOSSES',
     badgeColor: '#FFD700',
-    accentColor: '#FFD700',
+    accentColor: '#39FF14',
     imageUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=600&q=80',
     fallbackArt: DASHBOARD_ART.retroAdventure,
-    desc: 'Embark on an epic 8-bit quest across crumbling pixel kingdoms, royal castles, and forgotten dungeons.',
-    tags: ['Retro 8-Bit', 'Castle Quest', 'Pixel Art'],
-    rewardXp: 60,
-    rewardCoins: 15,
+    desc: 'Embark on an epic 8-bit quest across crumbling pixel kingdoms, royal castles, and forgotten dungeons. Slay monsters, conquer 4 bosses, and defeat the Ancient Red Dragon!',
+    tags: ['8-Bit Classic', '10 Missions', 'Boss Battles', 'Cloud Saved', 'Controller Ready'],
+    rewardXp: 100,
+    rewardCoins: 50,
+    isPixelKingdom: true,
   },
   {
     id: 'g_neon_runner',
@@ -300,6 +303,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [isTargetGameOpen, setIsTargetGameOpen] = useState(false);
   const [isLogicCodeOpen, setIsLogicCodeOpen] = useState(false);
   const [isBrainBlitzOpen, setIsBrainBlitzOpen] = useState(false);
+  const [isPixelKingdomOpen, setIsPixelKingdomOpen] = useState(false);
   const [hasActiveTargetSession, setHasActiveTargetSession] = useState(false);
   const [targetLevelToPlay, setTargetLevelToPlay] = useState(1);
   const [unlockedLevel, setUnlockedLevel] = useState(1);
@@ -312,6 +316,16 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     async function checkSavedSessions() {
       try {
         if (!user?.id) return;
+        const pk = await PixelKingdomPersistenceService.getActiveSession(user.id);
+        if (pk && pk.level && isMounted) {
+          setSavedSessionInfo({
+            type: 'pixel_kingdom',
+            title: `Pixel Kingdom Adventure`,
+            subtitle: `Stage ${pk.level} • ${pk.score || 0} Pts • ${pk.health || 100}% HP`,
+            game: { id: 'g_retro_adv', isPixelKingdom: true, title: 'Pixel Kingdom Adventure' },
+          });
+          return;
+        }
         const bb = await BrainBlitzPersistenceService.getActiveSession(user.id);
         if (bb && bb.level && isMounted) {
           setSavedSessionInfo({
@@ -342,7 +356,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     return () => {
       isMounted = false;
     };
-  }, [user?.id, activeTab, isBrainBlitzOpen, isTargetGameOpen, isLogicCodeOpen]);
+  }, [user?.id, activeTab, isBrainBlitzOpen, isTargetGameOpen, isLogicCodeOpen, isPixelKingdomOpen]);
 
   // Centralized Navigation Service Subscriptions
   useEffect(() => {
@@ -353,6 +367,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
           setIsTargetGameOpen(false);
           setIsLogicCodeOpen(false);
           setIsBrainBlitzOpen(false);
+          setIsPixelKingdomOpen(false);
           setSelectedGameModal(null);
         } else if (['target_number', 'target_level_select', 'target_gameplay'].includes(route.id)) {
           setActiveTab('games');
@@ -363,6 +378,9 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
         } else if (['brain_blitz', 'brain_blitz_levels', 'brain_blitz_gameplay'].includes(route.id)) {
           setActiveTab('games');
           setIsBrainBlitzOpen(true);
+        } else if (['pixel_kingdom', 'pixel_kingdom_levels', 'pixel_kingdom_gameplay'].includes(route.id)) {
+          setActiveTab('games');
+          setIsPixelKingdomOpen(true);
         } else if (route.id === 'game_details') {
           setActiveTab('games');
           setSelectedGameModal(route.params?.game || ALL_GAMES[0]);
@@ -548,6 +566,16 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       game?.title?.toLowerCase().includes('target')
     ) {
       NavigationService.navigate('target_number');
+      return;
+    }
+    if (
+      game?.id === 'g_retro_adv' ||
+      game?.id === 'pixel_kingdom' ||
+      game?.isPixelKingdom ||
+      game?.title?.toLowerCase().includes('pixel kingdom') ||
+      game?.title?.toLowerCase().includes('retro adventure')
+    ) {
+      NavigationService.navigate('pixel_kingdom');
       return;
     }
     NavigationService.navigate('game_details', { game });
@@ -1745,6 +1773,13 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       <BrainBlitzGameModal
         visible={isBrainBlitzOpen}
         onClose={() => setIsBrainBlitzOpen(false)}
+        onSessionComplete={handleTransactionsChanged}
+      />
+
+      {/* PIXO Pixel Kingdom Adventure - 8-Bit Platformer Modal (10 Missions, 4 Bosses) */}
+      <PixelKingdomGameModal
+        visible={isPixelKingdomOpen}
+        onClose={() => setIsPixelKingdomOpen(false)}
         onSessionComplete={handleTransactionsChanged}
       />
 
