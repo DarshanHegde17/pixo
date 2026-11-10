@@ -8,6 +8,7 @@ import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { HomeScreen } from './src/screens/HomeScreen';
 import { LoginScreen } from './src/screens/LoginScreen';
 import { GlowingBackground } from './src/components/GlowingBackground';
+import { ErrorBoundary } from './src/components/common/ErrorBoundary';
 import { colors } from './src/theme';
 
 function AppContent() {
@@ -51,9 +52,11 @@ function AppContent() {
 export default function App() {
   return (
     <SafeAreaProvider>
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
+      <ErrorBoundary>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </ErrorBoundary>
     </SafeAreaProvider>
   );
 }

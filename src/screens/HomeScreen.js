@@ -20,9 +20,9 @@ import { GameSessionRunnerModal } from '../components/gameplay/GameSessionRunner
 import { TargetNumberGameModal } from '../components/gameplay/TargetNumberGameModal';
 import { LogicCodeGameModal } from '../components/gameplay/LogicCodeGameModal';
 import { BrainBlitzGameModal } from '../components/gameplay/BrainBlitzGameModal';
-import { PixelKingdomGameModal } from '../components/gameplay/PixelKingdomGameModal';
+import { PathFinderGameModal } from '../components/gameplay/PathFinderGameModal';
 import { BrainBlitzPersistenceService } from '../services/brainBlitzPersistenceService';
-import { PixelKingdomPersistenceService } from '../services/pixelKingdomPersistenceService';
+import { PathFinderPersistenceService } from '../services/pathFinderPersistenceService';
 import { RestoreStreakModal } from '../components/profile/RestoreStreakModal';
 import { CoinStoreScreen } from './CoinStoreScreen';
 import {
@@ -105,22 +105,22 @@ export const ALL_GAMES = [
     isTargetGame: true,
   },
   {
-    id: 'g_retro_adv',
-    title: 'Pixel Kingdom Adventure',
-    category: '8-Bit Retro Platform Adventure',
-    catId: 'retro',
+    id: 'g_path_finder',
+    title: 'Path Finder',
+    category: 'Brain Training • Logical Path Puzzle',
+    catId: 'puzzle',
     rating: '4.8',
-    reviews: '14.5k',
-    badge: '10 STAGES • 4 BOSSES',
-    badgeColor: '#FFD700',
+    reviews: '1.4k',
+    badge: '4 MODES • 10 STAGES',
+    badgeColor: '#39FF14',
     accentColor: '#39FF14',
-    imageUrl: 'https://images.unsplash.com/photo-1550745165-9bc0b252726f?auto=format&fit=crop&w=600&q=80',
-    fallbackArt: DASHBOARD_ART.retroAdventure,
-    desc: 'Embark on an epic 8-bit quest across crumbling pixel kingdoms, royal castles, and forgotten dungeons. Slay monsters, conquer 4 bosses, and defeat the Ancient Red Dragon!',
-    tags: ['8-Bit Classic', '10 Missions', 'Boss Battles', 'Cloud Saved', 'Controller Ready'],
+    imageUrl: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?auto=format&fit=crop&w=600&q=80',
+    fallbackArt: DASHBOARD_ART.logicPuzzle,
+    desc: 'Think Smart. Find the Path. Reach the Goal. Challenge your brain with exciting path puzzles. Find the correct route, avoid obstacles, solve clues, and reach the destination.',
+    tags: ['Logical Puzzle', '10 Stages', '4 Modes', 'Cloud Saved', 'Touch Controls Ready'],
     rewardXp: 100,
-    rewardCoins: 50,
-    isPixelKingdom: true,
+    rewardCoins: 20,
+    isPathFinder: true,
   },
   {
     id: 'g_neon_runner',
@@ -303,7 +303,7 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
   const [isTargetGameOpen, setIsTargetGameOpen] = useState(false);
   const [isLogicCodeOpen, setIsLogicCodeOpen] = useState(false);
   const [isBrainBlitzOpen, setIsBrainBlitzOpen] = useState(false);
-  const [isPixelKingdomOpen, setIsPixelKingdomOpen] = useState(false);
+  const [isPathFinderOpen, setIsPathFinderOpen] = useState(false);
   const [hasActiveTargetSession, setHasActiveTargetSession] = useState(false);
   const [targetLevelToPlay, setTargetLevelToPlay] = useState(1);
   const [unlockedLevel, setUnlockedLevel] = useState(1);
@@ -316,13 +316,13 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     async function checkSavedSessions() {
       try {
         if (!user?.id) return;
-        const pk = await PixelKingdomPersistenceService.getActiveSession(user.id);
-        if (pk && pk.level && isMounted) {
+        const pf = await PathFinderPersistenceService.getActiveSession(user.id);
+        if (pf && pf.stageId && isMounted) {
           setSavedSessionInfo({
-            type: 'pixel_kingdom',
-            title: `Pixel Kingdom Adventure`,
-            subtitle: `Stage ${pk.level} • ${pk.score || 0} Pts • ${pk.health || 100}% HP`,
-            game: { id: 'g_retro_adv', isPixelKingdom: true, title: 'Pixel Kingdom Adventure' },
+            type: 'path_finder',
+            title: `Path Finder`,
+            subtitle: `Stage ${pf.stageId} • ${pf.moveCount || 0} Moves • ${pf.timer || 0}s`,
+            game: { id: 'g_path_finder', isPathFinder: true, title: 'Path Finder' },
           });
           return;
         }
@@ -356,18 +356,18 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
     return () => {
       isMounted = false;
     };
-  }, [user?.id, activeTab, isBrainBlitzOpen, isTargetGameOpen, isLogicCodeOpen, isPixelKingdomOpen]);
+  }, [user?.id, activeTab, isBrainBlitzOpen, isTargetGameOpen, isLogicCodeOpen, isPathFinderOpen]);
 
   // Centralized Navigation Service Subscriptions
   useEffect(() => {
-    const unsubRoute = NavigationService.subscribe((route) => {
+    const applyRoute = (route) => {
       if (route && route.id) {
         if (['home', 'games', 'quests', 'store', 'profile'].includes(route.id)) {
           setActiveTab(route.id);
           setIsTargetGameOpen(false);
           setIsLogicCodeOpen(false);
           setIsBrainBlitzOpen(false);
-          setIsPixelKingdomOpen(false);
+          setIsPathFinderOpen(false);
           setSelectedGameModal(null);
         } else if (['target_number', 'target_level_select', 'target_gameplay'].includes(route.id)) {
           setActiveTab('games');
@@ -378,15 +378,20 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
         } else if (['brain_blitz', 'brain_blitz_levels', 'brain_blitz_gameplay'].includes(route.id)) {
           setActiveTab('games');
           setIsBrainBlitzOpen(true);
-        } else if (['pixel_kingdom', 'pixel_kingdom_levels', 'pixel_kingdom_gameplay'].includes(route.id)) {
+        } else if (['path_finder', 'path_finder_stages', 'path_finder_gameplay'].includes(route.id)) {
           setActiveTab('games');
-          setIsPixelKingdomOpen(true);
+          setIsPathFinderOpen(true);
         } else if (route.id === 'game_details') {
           setActiveTab('games');
           setSelectedGameModal(route.params?.game || ALL_GAMES[0]);
         }
       }
-    });
+    };
+
+    // Immediately synchronize with current route on mount
+    applyRoute(NavigationService.getCurrentRoute());
+
+    const unsubRoute = NavigationService.subscribe(applyRoute);
 
     const unsubExit = NavigationService.onExitRequest(() => {
       setIsExitConfirmVisible(true);
@@ -569,13 +574,12 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
       return;
     }
     if (
-      game?.id === 'g_retro_adv' ||
-      game?.id === 'pixel_kingdom' ||
-      game?.isPixelKingdom ||
-      game?.title?.toLowerCase().includes('pixel kingdom') ||
-      game?.title?.toLowerCase().includes('retro adventure')
+      game?.id === 'g_path_finder' ||
+      game?.id === 'path_finder' ||
+      game?.isPathFinder ||
+      game?.title?.toLowerCase().includes('path finder')
     ) {
-      NavigationService.navigate('pixel_kingdom');
+      NavigationService.navigate('path_finder');
       return;
     }
     NavigationService.navigate('game_details', { game });
@@ -1776,10 +1780,10 @@ export const HomeScreen = ({ onNavigateToLogin }) => {
         onSessionComplete={handleTransactionsChanged}
       />
 
-      {/* PIXO Pixel Kingdom Adventure - 8-Bit Platformer Modal (10 Missions, 4 Bosses) */}
-      <PixelKingdomGameModal
-        visible={isPixelKingdomOpen}
-        onClose={() => setIsPixelKingdomOpen(false)}
+      {/* PIXO Path Finder - Brain Training Logical Puzzle Modal (4 Modes, 10 Stages) */}
+      <PathFinderGameModal
+        visible={isPathFinderOpen}
+        onClose={() => setIsPathFinderOpen(false)}
         onSessionComplete={handleTransactionsChanged}
       />
 

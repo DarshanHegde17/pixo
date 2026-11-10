@@ -99,9 +99,9 @@ class NavigationServiceSingleton {
       'brain_blitz',
       'brain_blitz_levels',
       'brain_blitz_gameplay',
-      'pixel_kingdom',
-      'pixel_kingdom_levels',
-      'pixel_kingdom_gameplay',
+      'path_finder',
+      'path_finder_stages',
+      'path_finder_gameplay',
       'game_details',
     ];
     return valid.includes(routeId);
@@ -436,6 +436,10 @@ class NavigationServiceSingleton {
     };
   }
 
+  addListener(callback) {
+    return this.subscribe(callback);
+  }
+
   onExitRequest(callback) {
     this.exitSubscribers.add(callback);
     return () => {
@@ -502,12 +506,12 @@ class NavigationServiceSingleton {
         return 'Brain Blitz • Level Selection';
       case 'brain_blitz_gameplay':
         return 'Brain Blitz • Arena';
-      case 'pixel_kingdom':
-        return 'Pixel Kingdom Adventure';
-      case 'pixel_kingdom_levels':
-        return 'Pixel Kingdom • Mission Level Selection';
-      case 'pixel_kingdom_gameplay':
-        return 'Pixel Kingdom • Active Mission';
+      case 'path_finder':
+        return 'PIXO Path Finder';
+      case 'path_finder_stages':
+        return 'Path Finder • Stage Selection';
+      case 'path_finder_gameplay':
+        return 'Path Finder • Puzzle Arena';
       case 'game_details':
         return 'Game Details';
       default:
